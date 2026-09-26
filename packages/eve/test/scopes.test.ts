@@ -65,6 +65,7 @@ describe("resolveScope", () => {
 			namespace: "k",
 		});
 		expect(resolveScope(scope(["t1", "u1"]), "personal").auth.userId).toBe("u1");
+		expect(resolveScope(scope(["t1"]), "organization", "fixed").auth.namespace).toBe("fixed");
 	});
 
 	it("rejects scopes that do not match the audience", () => {

@@ -295,6 +295,49 @@ describe.skipIf(!available)("mnemonMemory", () => {
 		}
 	});
 
+	it("keeps memories across Eve key changes with a fixed namespace", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const provider = mnemonMemory({
+				client,
+				audience: "organization",
+				gate: jevGate({ evaluate: fakeEvaluate }),
+				namespace: "org-memory",
+			});
+			const memory = (key: string, tenant: string) => ({
+				slot: "organization",
+				scope: { key, namespace: "app", value: [tenant] },
+			});
+			const tools = await provider.tools({
+				memory: memory("key-before-rename", "tenant-a"),
+				turn: { id: "t", sequence: 1, input: [] },
+			} as never);
+			const tool = tools.propose_memory as unknown as {
+				execute(input: { fact: string }, ctx: unknown): Promise<ProposalResult>;
+			};
+			await tool.execute(
+				{ fact: "Refunds over 500 euros need CFO approval" },
+				{ callId: "c", abortSignal: new AbortController().signal },
+			);
+			const recall = (key: string, tenant: string) =>
+				provider.recall["turn.started"]({
+					memory: memory(key, tenant),
+					operationId: crypto.randomUUID(),
+					abortSignal: new AbortController().signal,
+					turn: { id: "t", sequence: 1, input: [{ role: "user", content: "who approves refunds?" }] },
+				} as never) as Promise<{ messages: unknown[] }>;
+			expect((await recall("key-after-rename", "tenant-a")).messages).toHaveLength(1);
+			expect((await recall("key-after-rename", "tenant-b")).messages).toEqual([]);
+		});
+	});
+
+	it("rejects an invalid fixed namespace", () => {
+		for (const namespace of ["", " padded", "x".repeat(201)]) {
+			expect(() =>
+				mnemonMemory({ client: {} as MnemonClient, audience: "organization", namespace, gate: jevGate({ evaluate: fakeEvaluate }) }),
+			).toThrow(/namespace must be/);
+		}
+	});
+
 	it("throws when a slot's scope does not match its audience", async () => {
 		await withMnemon({}, async (_m, { client }) => {
 			const wrong = slot(client, "personal", ["tenant-a"]);

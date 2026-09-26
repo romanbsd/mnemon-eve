@@ -13,8 +13,8 @@ which proposals are stored. The default gate is TypeSafe Jev when
 OpenAI-compatible LLM or your own function also works.
 
 Identity comes only from Eve's authenticated session; the model never supplies
-tenant or user ids. Every query is partitioned by Eve's scope key, and
-PostgreSQL row-level security enforces the tenant boundary.
+tenant or user ids. Every query is partitioned by tenant, user, and a
+namespace, and PostgreSQL row-level security enforces the tenant boundary.
 
 ## Contents
 
@@ -101,7 +101,7 @@ import { mnemon } from "../lib/mnemon";
 export default defineMemory({
   description: "Shared durable knowledge for the current organization.",
   scope: byTenant,
-  provider: mnemonMemory({ client: mnemon, audience: "organization" }),
+  provider: mnemonMemory({ client: mnemon, audience: "organization", namespace: "org-memory" }),
 });
 ```
 
@@ -113,13 +113,19 @@ import { mnemon } from "../lib/mnemon";
 export default defineMemory({
   description: "Private durable memory for this user in this organization.",
   scope: byTenantPrincipal,
-  provider: mnemonMemory({ client: mnemon, audience: "personal" }),
+  provider: mnemonMemory({ client: mnemon, audience: "personal", namespace: "personal-memory" }),
 });
 ```
 
 The slot's scope resolver and `audience` must match: `byTenant` with
 `"organization"`, and `byTenantPrincipal` with `"personal"`. Keep Eve's
 default `visibility: "scope"`.
+
+Set `namespace` on every slot and never change it. Without it, memories live
+under Eve's scope key, which changes when the slot or node is renamed, the app
+moves to another folder, or it runs in another Vercel project, environment, or
+preview branch, and the agent then starts with no memories (see
+[Namespaces](#namespaces)).
 
 You can use just one slot. For example, a single-user product may only need
 `personal`.
@@ -251,10 +257,28 @@ session auth ──> scope resolver ──> locked Eve scope (tenant[, user]) + 
      inject ≤ recallLimit memories                 gate ─> reject | remember (dedupe)
 ```
 
-The Mnemon namespace is Eve's `memory.scope.key`, a digest of Eve's memory
-namespace and the resolved scope. Each slot, tenant, user, and deployment
-therefore has its own partition. To share memory across deployments or
-agents, set `namespace` in `defineMemory`; see Eve's memory docs.
+### Namespaces
+
+A memory's partition is its tenant, its user (personal slots only), and a
+Mnemon namespace. Tenant and user come from the locked Eve scope value, so
+isolation never depends on the namespace.
+
+With `namespace` set, the Mnemon namespace is that string. Slots and agents
+that use the same string share memory for the same tenant (and user);
+production, previews, and local runs share it too if they use one database.
+Use separate databases or different strings to keep them apart.
+
+Without it, the namespace is Eve's `memory.scope.key`, a digest of Eve's
+memory namespace and the scope value. Unless the slot sets an Eve `namespace`
+in `defineMemory`, Eve derives that from the app's folder (local) or the
+Vercel project, environment, and preview branch, plus the node and slot names.
+Any change there gives a new key, and memories stored under the old one are no
+longer recalled. They stay in the database; to reach them, pass the old key as
+the namespace to `@mnemon/core` (it is the `namespace` of their rows).
+
+A fixed namespace also lets jobs outside Eve, such as `importDraft`,
+`retentionCandidates`, or `memoryReceipt` from `@mnemon/core`, address the same
+memories: scope the client with the same tenant, user, and namespace.
 
 ### Recall
 
@@ -357,6 +381,7 @@ mnemonMemory({
   relatedLimit: 5,         // same-scope memories shown to the gate
   recallFilter: undefined, // drops unhelpful recalled memories; see Recall filter
   gate: undefined,         // decides what is stored; default depends on TYPESAFE_API_KEY, see Gates
+  namespace: "org-memory", // fixed Mnemon namespace; default Eve's scope.key, see Namespaces
   onEvent: (event) => {},  // metadata-only metrics; see Observability
 });
 ```
@@ -651,8 +676,9 @@ instructions before adding automatic capture.
 2. Missing, anonymous, runtime, service, or ambiguous (multi-tenant) identity
    disables the slot.
 3. Personal memory is always tenant + user, never user alone.
-4. Every read and write is constrained by Eve's scope key inside the SQL
-   query, before ranking.
+4. Every read and write is constrained by tenant, user, and namespace (the
+   fixed `namespace` option or Eve's scope key) inside the SQL query, before
+   ranking.
 5. The tenant is enforced by PostgreSQL RLS in a transaction-local context.
    For a database-enforced user boundary too, create the client with
    `enforceUserScope: true`. Each personal slot already has its own

@@ -84,6 +84,14 @@ export interface MnemonMemoryOptions {
 	 * `heuristicGate()`. See also `llmGate()`.
 	 */
 	gate?: MemoryGate;
+	/**
+	 * Fixed Mnemon namespace for this slot, e.g. `"org-memory"`. Default: Eve's
+	 * `scope.key`, which changes when the slot's Eve namespace, node, slot name,
+	 * or (without an explicit Eve namespace) app path or Vercel deployment
+	 * changes, leaving earlier memories unreachable. Tenant and user isolation
+	 * come from the scope value either way.
+	 */
+	namespace?: string;
 	onEvent?: (event: MnemonEveEvent) => void;
 }
 
@@ -104,6 +112,7 @@ function defaultGate(): MemoryGate {
 
 const MAX_QUERY_CHARS = 2000;
 const MAX_CONTEXT_CHARS = 4000;
+const MAX_NAMESPACE_CHARS = 200;
 
 export function mnemonMemory(options: MnemonMemoryOptions) {
 	const { client, audience } = options;
@@ -111,6 +120,15 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 	const recallCharBudget = options.recallCharBudget ?? 4000;
 	const relatedLimit = options.relatedLimit ?? 5;
 	const gate = options.gate ?? defaultGate();
+	const namespace = options.namespace;
+	if (
+		namespace !== undefined &&
+		(!isIdentifier(namespace) || namespace.length > MAX_NAMESPACE_CHARS)
+	) {
+		throw new MnemonEveScopeError(
+			`namespace must be 1-${MAX_NAMESPACE_CHARS} characters without surrounding whitespace`,
+		);
+	}
 	const emit = (event: MnemonEveEvent) => {
 		try {
 			options.onEvent?.(event);
@@ -121,7 +139,7 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 		recall: {
 			async "turn.started"(ctx) {
 				const started = performance.now();
-				const scope = resolveScope(ctx.memory, audience);
+				const scope = resolveScope(ctx.memory, audience, namespace);
 				const query = clip(userText(ctx.turn.input), MAX_QUERY_CHARS);
 				let candidates: number | undefined;
 				let filterFailed: boolean | undefined;
@@ -187,7 +205,7 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 		// eslint-disable-next-line @typescript-eslint/require-await -- Eve requires a promise; async turns resolveScope throws into rejections.
 		async tools(ctx) {
 			// Resolved once here; the tool closes over the locked scope.
-			const scope = resolveScope(ctx.memory, audience);
+			const scope = resolveScope(ctx.memory, audience, namespace);
 			const slot = ctx.memory.slot;
 			const recentContext = clip(userText(ctx.turn.input), MAX_CONTEXT_CHARS);
 			return {
@@ -299,6 +317,7 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 export function resolveScope(
 	memory: { readonly scope: MemoryScope; readonly slot: string },
 	audience: MemoryAudience,
+	namespace: string = memory.scope.key,
 ): { auth: MnemonAuthorization; partition: string } {
 	const value = memory.scope.value;
 	const size = audience === "organization" ? 1 : 2;
@@ -315,9 +334,9 @@ export function resolveScope(
 		auth: {
 			tenantId: value[0] as string,
 			userId: audience === "personal" ? value[1] : null,
-			// Eve's partition key doubles as the Mnemon namespace, so every read
-			// and write is constrained to it inside the query.
-			namespace: memory.scope.key,
+			// Eve's partition key doubles as the Mnemon namespace unless a fixed
+			// one is configured; every read and write is constrained to it.
+			namespace,
 		},
 		partition: digest(memory.scope.key).slice(0, 12),
 	};
