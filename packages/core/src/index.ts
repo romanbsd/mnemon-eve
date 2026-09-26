@@ -33,6 +33,7 @@ export type {
 	DiffSuggestion,
 	Edge,
 	EdgeType,
+	EmbedMissingResult,
 	ForgetResult,
 	Insight,
 	InsightCategory,

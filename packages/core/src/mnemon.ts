@@ -17,6 +17,7 @@ import {
 	DEFAULT_RELATED_DEPTH,
 	DEFAULT_RELATED_LIMIT,
 	KEEP_ACCESS_BOOST,
+	MAX_LIST_LIMIT,
 	MAX_RELATED_DEPTH,
 	MAX_RELATED_LIMIT,
 	MAX_SEMANTIC_EDGES,
@@ -53,6 +54,7 @@ import {
 import { effectiveImportance, isImmune } from "./engine/retention.js";
 import { sortedSearchTokens, sortedTokens } from "./engine/tokenize.js";
 import {
+	requireLimit,
 	validateEmbedding,
 	validateLinkInput,
 	validateListInput,
@@ -88,6 +90,7 @@ import {
 	EDGE_TYPES,
 	type Edge,
 	type EdgeType,
+	type EmbedMissingResult,
 	type ForgetResult,
 	type Insight,
 	type LinkInput,
@@ -138,6 +141,7 @@ const SCOPED_METHODS = [
 	"status",
 	"retentionCandidates",
 	"keep",
+	"embedMissing",
 	"once",
 ] as const satisfies readonly (keyof Mnemon)[];
 
@@ -838,6 +842,45 @@ class MnemonService implements Mnemon {
 				.slice(0, limit)
 				.map((c) => ({ ...c, insight: toPublicInsight(c.insight) })),
 		};
+	}
+
+	async embedMissing(input?: {
+		limit?: number;
+	}): Promise<EmbedMissingResult> {
+		const provider = this.config.embeddingProvider;
+		if (!provider) {
+			throw new MnemonConfigurationError(
+				"embedding provider is not configured",
+			);
+		}
+		const limit = requireLimit(input?.limit ?? 100, MAX_LIST_LIMIT);
+		const { total, insights } = await this.store.listUnembedded(limit);
+		const vectors = new Map<string, number[]>();
+		// ponytail: sequential; batch provider calls if backfills get large.
+		for (const insight of insights) {
+			vectors.set(insight.id, await this.embed(insight.content, "document"));
+		}
+		const now = this.config.clock.now();
+		const embedded = await this.store.withTransaction(async (tx) => {
+			if (vectors.size > 0) {
+				await tx.establishEmbeddingSettings(
+					provider.dimensions,
+					provider.model,
+					now,
+				);
+			}
+			const count = await tx.setMissingEmbeddings(vectors);
+			if (count > 0) {
+				await tx.appendOp(
+					"embed:backfill",
+					null,
+					{ embedded: count, model: provider.model },
+					now,
+				);
+			}
+			return count;
+		});
+		return { embedded, remaining: Math.max(0, total - embedded) };
 	}
 
 	async keep(id: string): Promise<Insight> {

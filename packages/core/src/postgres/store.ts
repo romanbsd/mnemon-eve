@@ -140,6 +140,10 @@ export interface MnemonStore {
 		since: Date;
 		entities: readonly string[];
 	}): Promise<EdgeContext>;
+	/** Oldest active insights with no embedding, and how many there are in total. */
+	listUnembedded(
+		limit: number,
+	): Promise<{ total: number; insights: InsightRecord[] }>;
 	/** Every active insight with its edge count. */
 	listRetentionRows(): Promise<{ insight: InsightRecord; edgeCount: number }[]>;
 	getSetting(key: string): Promise<unknown>;
@@ -165,6 +169,8 @@ export interface MnemonStoreTx {
 	): Promise<void>;
 	setEffectiveImportance(id: string, value: number): Promise<void>;
 	setEffectiveImportances(values: ReadonlyMap<string, number>): Promise<void>;
+	/** Sets embeddings only where still missing; returns how many were set. */
+	setMissingEmbeddings(values: ReadonlyMap<string, readonly number[]>): Promise<number>;
 	establishEmbeddingSettings(
 		dimensions: number,
 		model: string,
@@ -877,6 +883,22 @@ export class PostgresMnemonStore implements MnemonStore {
 			.map(([id, row]) => ({ id, score: row.score, via: row.via }));
 	}
 
+	async listUnembedded(
+		limit: number,
+	): Promise<{ total: number; insights: InsightRecord[] }> {
+		const [insights, count] = await Promise.all([
+			this.queryInsights(
+				"embedding IS NULL ORDER BY created_at ASC, id ASC LIMIT $2",
+				[limit],
+			),
+			this.client.query<{ total: number }>(
+				`SELECT count(*)::int AS total FROM ${this.s}.insights WHERE namespace = $1 AND deleted_at IS NULL AND embedding IS NULL`,
+				[this.namespace],
+			),
+		]);
+		return { total: count.rows[0]?.total ?? 0, insights };
+	}
+
 	// ponytail: loads the whole namespace; page by effective_importance if namespaces grow past ~100k rows.
 	async listRetentionRows(): Promise<
 		{ insight: InsightRecord; edgeCount: number }[]
@@ -1149,6 +1171,25 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
       `,
 			[this.namespace, [...values.keys()], [...values.values()]],
 		);
+	}
+
+	async setMissingEmbeddings(
+		values: ReadonlyMap<string, readonly number[]>,
+	): Promise<number> {
+		if (values.size === 0) {
+			return 0;
+		}
+		const result = await this.client.query(
+			`
+      UPDATE ${this.s}.insights AS i
+      SET embedding = u.embedding::vector
+      FROM unnest($2::uuid[], $3::text[]) AS u(id, embedding)
+      WHERE i.namespace = $1 AND i.id = u.id
+        AND i.deleted_at IS NULL AND i.embedding IS NULL
+      `,
+			[this.namespace, [...values.keys()], [...values.values()].map(vec)],
+		);
+		return result.rowCount ?? 0;
 	}
 
 	async establishEmbeddingSettings(

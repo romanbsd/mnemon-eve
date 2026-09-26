@@ -90,7 +90,11 @@ function requireNonEmptyTrimmed(
 	return trimmed;
 }
 
-function requireLimit(limit: number, max: number, field = "limit"): number {
+export function requireLimit(
+	limit: number,
+	max: number,
+	field = "limit",
+): number {
 	if (!Number.isInteger(limit) || limit < 1 || limit > max) {
 		fail(
 			field,

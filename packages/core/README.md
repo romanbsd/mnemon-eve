@@ -154,6 +154,7 @@ await client.withAuthorization(auth, async (tx) => {
 | `status()` | Counts and embedding settings. |
 | `retentionCandidates(input?)` | Low-value memories to review for `forget`. |
 | `keep(id)` | Exempt a memory from retention candidates. |
+| `embedMissing(input?)` | Embed memories stored before a provider was configured. |
 | `once(key, fn)` | Run `fn` at most once per key. |
 
 #### remember
@@ -362,6 +363,21 @@ entity, and graph signals. With them, recall adds vector similarity, and
 The first client that uses a provider records its model and dimensions in the
 schema. A later client with a different model or dimensions fails
 `initialize()`. To change the model, use a new `schema`.
+
+Adding a provider to an existing store only embeds new memories. Older ones
+are invisible to vector recall and near-duplicate checks until you backfill
+them, per namespace:
+
+```ts
+let result;
+do {
+  result = await memory.embedMissing({ limit: 100 }); // oldest first
+} while (result.embedded > 0 && result.remaining > 0);
+```
+
+A provider error throws and writes nothing from that batch, so a rerun picks up
+where it stopped. `status().embeddings` shows coverage. Backfilled memories get
+vectors but not the semantic edges `remember` would have created.
 
 Built-in HTTP providers:
 

@@ -474,6 +474,36 @@ describe.skipIf(!available)("postgres integration", () => {
 		});
 	});
 
+	it("backfills embeddings for memories stored without a provider", async () => {
+		await withMnemon({ clock }, async (plain, { pool, schema }) => {
+			const a = await plain.remember({ content: "alpha note" });
+			await plain.remember({ content: "beta note" });
+			await expect(plain.embedMissing()).rejects.toThrow(/not configured/);
+
+			const provider = new FakeEmbeddingProvider("fixture", 4, {
+				"document:alpha note": unitVector(4, 0),
+				"document:beta note": unitVector(4, 1),
+				"query:first letter": unitVector(4, 0),
+			});
+			const client = createMnemon({ pool, schema, clock, embeddingProvider: provider });
+			const mnemon = client.scope({
+				tenantId: TEST_TENANT,
+				namespace: "test-application",
+			});
+			expect(await mnemon.embedMissing({ limit: 1 })).toEqual({
+				embedded: 1,
+				remaining: 1,
+			});
+			expect(await mnemon.embedMissing()).toEqual({ embedded: 1, remaining: 0 });
+			expect(await mnemon.embedMissing()).toEqual({ embedded: 0, remaining: 0 });
+			expect((await mnemon.status()).embeddings).toBe(2);
+			expect((await mnemon.log({ operation: "embed:backfill" })).length).toBe(2);
+			const hit = await mnemon.recall({ query: "first letter", limit: 1 });
+			expect(hit.results[0]?.insight.id).toBe(a.insight.id);
+			expect(hit.results[0]?.signals.similarity).toBeGreaterThan(0.9);
+		});
+	});
+
 	it("rejects a second provider with a different dimension", async () => {
 		const first = new FakeEmbeddingProvider("a", 4, {
 			"document:dim": unitVector(4, 0),

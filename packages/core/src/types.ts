@@ -199,6 +199,13 @@ export interface RetentionResult {
 	candidates: RetentionCandidate[];
 }
 
+export interface EmbedMissingResult {
+	/** Memories embedded by this call. */
+	embedded: number;
+	/** Memories still without an embedding. */
+	remaining: number;
+}
+
 export interface SearchHit {
 	insight: Insight;
 	score: number;
@@ -276,6 +283,11 @@ export interface Mnemon {
 	 * importance for the namespace; never deletes.
 	 */
 	retentionCandidates(input?: RetentionInput): Promise<RetentionResult>;
+	/**
+	 * Embeds up to `limit` (default 100) memories stored before an embedding
+	 * provider was configured, oldest first. Call until `remaining` is 0.
+	 */
+	embedMissing(input?: { limit?: number }): Promise<EmbedMissingResult>;
 	/** Marks a memory worth keeping: +3 accesses and a fresh access time. */
 	keep(id: string): Promise<Insight>;
 	/**
