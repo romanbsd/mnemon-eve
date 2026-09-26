@@ -15,6 +15,7 @@ import {
 	type MemoryAudience,
 	type MemoryGate,
 } from "./gate.js";
+import type { RecallFilter } from "./recall-filter.js";
 import { isIdentifier } from "./scopes.js";
 
 export type ProposalStatus = "stored" | "duplicate" | "rejected";
@@ -38,6 +39,10 @@ export type MnemonEveEvent =
 			operationId: string;
 			partition: string;
 			count: number;
+			/** Hits shown to `recallFilter`; absent without a filter or on replay. */
+			candidates?: number;
+			/** `recallFilter` threw, so unfiltered hits were injected. */
+			filterFailed?: boolean;
 			latencyMs: number;
 			replayed: boolean;
 	  }
@@ -66,6 +71,11 @@ export interface MnemonMemoryOptions {
 	recallCharBudget?: number;
 	/** Same-scope memories shown to the gate for duplicate checks. Default 5. */
 	relatedLimit?: number;
+	/**
+	 * Drops recalled memories that would not help this turn. Default none:
+	 * recall can return unrelated recent memories. See `jevRecallFilter()`.
+	 */
+	recallFilter?: RecallFilter;
 	/** Decides which proposals are stored. Default `jevGate()`; see also `llmGate()`. */
 	gate?: MemoryGate;
 	onEvent?: (event: MnemonEveEvent) => void;
@@ -114,20 +124,48 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 				const started = performance.now();
 				const scope = resolveScope(ctx.memory, audience);
 				const query = clip(userText(ctx.turn.input), MAX_QUERY_CHARS);
+				let candidates: number | undefined;
+				let filterFailed: boolean | undefined;
 				// Eve may replay an operation and requires the same result.
 				const { value: messages, replayed } = await client.withAuthorization(
 					scope.auth,
 					(tx) =>
-						tx.once(`recall:${digest(ctx.operationId)}`, async (m) =>
-							query
-								? formatRecall(
-										(await m.recall({ query, limit: recallLimit })).results,
-										ctx.memory.slot,
-										audience,
-										recallCharBudget,
-									)
-								: [],
-						),
+						tx.once(`recall:${digest(ctx.operationId)}`, async (m) => {
+							if (!query) return [];
+							// ponytail: over-fetch 2x so filtering still fills the limit.
+							const { results } = await m.recall({
+								query,
+								limit: options.recallFilter ? Math.min(recallLimit * 2, 100) : recallLimit,
+							});
+							let hits = results;
+							if (options.recallFilter && hits.length) {
+								candidates = hits.length;
+								try {
+									const keep = new Set(
+										await options.recallFilter({
+											query,
+											audience,
+											memories: hits.map((h) => ({
+												id: h.insight.id,
+												content: clip(h.insight.content, 1000),
+											})),
+											abortSignal: ctx.abortSignal,
+										}),
+									);
+									hits = hits.filter((h) => keep.has(h.insight.id));
+								} catch (error) {
+									if (ctx.abortSignal.aborted) throw error;
+									// Fail open: recall worked, only the refinement did not.
+									filterFailed = true;
+								}
+							}
+							return formatRecall(
+								hits.slice(0, recallLimit),
+								ctx.memory.slot,
+								audience,
+								recallCharBudget,
+							);
+						}),
 				);
 				emit({
 					type: "recall",
@@ -136,6 +174,8 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 					operationId: ctx.operationId,
 					partition: scope.partition,
 					count: messages.length,
+					candidates,
+					filterFailed,
 					latencyMs: performance.now() - started,
 					replayed,
 				});

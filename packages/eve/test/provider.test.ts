@@ -9,6 +9,7 @@ import {
 	mnemonMemory,
 	jevGate,
 	type ProposalResult,
+	type RecallFilter,
 } from "../src/index.js";
 
 const available = await postgresAvailable();
@@ -38,11 +39,13 @@ function slot(
 	value: string[],
 	events: MnemonEveEvent[] = [],
 	evaluate: MemoryEvaluator = fakeEvaluate,
+	recallFilter?: RecallFilter,
 ) {
 	const provider = mnemonMemory({
 		client,
 		audience,
 		gate: jevGate({ evaluate }),
+		recallFilter,
 		onEvent: (e) => events.push(e),
 	});
 	const memory = {
@@ -53,6 +56,7 @@ function slot(
 		provider.recall["turn.started"]({
 			memory,
 			operationId,
+			abortSignal: new AbortController().signal,
 			turn: { id: "t", sequence: 1, input: [{ role: "user", content: text }] },
 		} as never) as Promise<{ messages: { id: string; content: string }[] }>;
 	const propose = async (fact: string, callId: string = crypto.randomUUID()) => {
@@ -173,6 +177,33 @@ describe.skipIf(!available)("mnemonMemory", () => {
 				"support lead",
 			);
 			expect(kept.status).toBe("stored");
+		});
+	});
+
+	it("injects only memories the recall filter keeps and fails open", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const events: MnemonEveEvent[] = [];
+			let shown = 0;
+			let fail = false;
+			const filter: RecallFilter = async ({ memories }) => {
+				shown = memories.length;
+				if (fail) throw new Error("filter down");
+				return [...memories.filter((m) => !m.content.includes("soup")).map((m) => m.id), "not-a-hit"];
+			};
+			const org = slot(client, "organization", ["tenant-a"], events, fakeEvaluate, filter);
+			await org.propose("Refunds over 500 euros need CFO approval");
+			await org.propose("The cafeteria serves soup on Tuesdays");
+
+			const kept = (await org.turn("who approves refunds?", "op-1")).messages;
+			expect(kept.map((m) => m.content).join()).toContain("CFO");
+			expect(kept.map((m) => m.content).join()).not.toContain("soup");
+			expect(events.at(-1)).toMatchObject({ type: "recall", count: kept.length, candidates: shown });
+
+			fail = true;
+			expect(await org.turn("who approves refunds?", "op-1")).toEqual({ messages: kept });
+			const open = (await org.turn("who approves refunds?", "op-2")).messages;
+			expect(open.map((m) => m.content).join()).toContain("soup");
+			expect(events.at(-1)).toMatchObject({ filterFailed: true });
 		});
 	});
 

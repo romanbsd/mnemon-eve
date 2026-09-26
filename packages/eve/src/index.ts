@@ -35,6 +35,14 @@ export {
 	resolveScope,
 } from "./provider.js";
 export {
+	type JevRecallFilterOptions,
+	jevRecallFilter,
+	type RecallEvaluator,
+	type RecallFilter,
+	type RecallFilterInput,
+	relevanceQuestion,
+} from "./recall-filter.js";
+export {
 	byTenant,
 	byTenantPrincipal,
 	type TenantScopeOptions,

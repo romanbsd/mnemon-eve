@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { postgresAvailable, withMnemon } from "../../../core/test/integration/helpers.js";
 import {
 	jevGate,
+	jevRecallFilter,
 	type MemoryAudience,
 	type MemoryGate,
 	mnemonMemory,
@@ -16,8 +17,16 @@ const available = Boolean(apiKey) && (await postgresAvailable());
 
 const jev = jevGate({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") });
 
-function slot(client: MnemonClient, audience: MemoryAudience, value: string[], gate: MemoryGate = jev) {
-	const provider = mnemonMemory({ client, audience, gate });
+const recallFilter = jevRecallFilter({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") });
+
+function slot(
+	client: MnemonClient,
+	audience: MemoryAudience,
+	value: string[],
+	gate: MemoryGate = jev,
+	filtered = false,
+) {
+	const provider = mnemonMemory({ client, audience, gate, ...(filtered ? { recallFilter } : {}) });
 	const memory = {
 		slot: audience,
 		scope: { key: `e2e:${audience}:${value.join("/")}`, namespace: "e2e", value },
@@ -26,6 +35,7 @@ function slot(client: MnemonClient, audience: MemoryAudience, value: string[], g
 		provider.recall["turn.started"]({
 			memory,
 			operationId: crypto.randomUUID(),
+			abortSignal: new AbortController().signal,
 			turn: { id: "t", sequence: 1, input: [{ role: "user", content: text }] },
 		} as never) as Promise<{ messages: { id: string; content: string }[] }>;
 	const propose = async (fact: string, callId: string = crypto.randomUUID()) => {
@@ -90,6 +100,26 @@ describe.skipIf(!available)("jevGate end to end", { timeout: 60_000 }, () => {
 			expect(recalled).toContain("CFO");
 			expect(recalled).not.toContain("must be approved by the head of customer support");
 			expect(recalled).toContain("10 business days");
+		});
+	});
+
+	it("filters recall to memories that help the turn", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const personal = slot(client, "personal", ["tenant-a", "dana"], jev, true);
+			for (const fact of [
+				"Dana prefers answers as short bullet lists without emojis",
+				"Dana's team owns the billing service",
+				"Dana is allergic to peanuts",
+			]) {
+				expect((await personal.propose(fact)).status).toBe("stored");
+			}
+			const recalled = (await personal.turn("Summarise the open billing service incidents for me")).messages
+				.map((m) => m.content)
+				.join();
+			console.log("filtered recall:", recalled.replace(/Recalled[^\n]*\n/g, "| "));
+			expect(recalled).toContain("billing service");
+			expect(recalled).toContain("bullet lists");
+			expect(recalled).not.toContain("peanuts");
 		});
 	});
 

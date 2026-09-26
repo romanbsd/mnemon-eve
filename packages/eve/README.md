@@ -265,6 +265,40 @@ in place rather than duplicating it. The result is stored per Eve
 `operationId`, so a replayed operation returns exactly the same messages, as
 Eve requires.
 
+### Recall filter
+
+Mnemon recall always returns something: besides keyword and vector matches it
+includes the most recent memories and their neighbours in time. That keeps
+standing preferences in view, but a query like "what's the weather in Paris?"
+still gets unrelated memories injected. To drop those, add a recall filter:
+
+```ts
+import { jevRecallFilter, mnemonMemory } from "@mnemon/eve";
+
+mnemonMemory({
+  client: mnemon,
+  audience: "personal",
+  recallFilter: jevRecallFilter(), // typesafe-ai/jev; { threshold: 0.5, model }
+});
+```
+
+With a filter, the provider recalls `2 × recallLimit` candidates and asks one
+Jev question per candidate in a single request (`relevanceQuestion(i)`). It
+keeps memories that help answer the query or that the response should follow,
+such as a preference about formatting, then injects up to `recallLimit` of
+them in rank order. This adds one evaluation round trip to every turn that
+recalls anything.
+
+A filter is any `(input) => Promise<string[]>` returning the ids to keep:
+
+```ts
+const recent: RecallFilter = async ({ memories }) => memories.slice(0, 3).map((m) => m.id);
+```
+
+If the filter throws, the turn gets the unfiltered memories and the recall
+event has `filterFailed: true`. The filter runs inside the per-operation
+record, so replays return the same messages without calling it again.
+
 ### propose_memory
 
 Eve exposes one tool per slot, e.g. `organization__propose_memory` and
@@ -313,6 +347,7 @@ mnemonMemory({
   recallLimit: 5,          // memories injected per turn
   recallCharBudget: 4000,  // total recalled characters per turn
   relatedLimit: 5,         // same-scope memories shown to the gate
+  recallFilter: undefined, // drops unhelpful recalled memories; see Recall filter
   gate: jevGate(),         // decides what is stored; see Gates
   onEvent: (event) => {},  // metadata-only metrics; see Observability
 });
@@ -542,7 +577,7 @@ mnemonMemory({
 
 | Event | Fields |
 | --- | --- |
-| `recall` | `slot`, `audience`, `operationId`, `partition`, `count`, `latencyMs`, `replayed` |
+| `recall` | `slot`, `audience`, `operationId`, `partition`, `count`, `candidates?` (shown to the filter), `filterFailed?`, `latencyMs`, `replayed` |
 | `proposal` | `slot`, `audience`, `callId`, `partition`, `status`, `reasons`, `superseded` (count), `gateMs?`, `writeMs?`, `latencyMs`, `replayed` |
 
 Exceptions thrown inside `onEvent` are swallowed. Track proposal rate and
