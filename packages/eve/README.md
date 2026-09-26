@@ -8,7 +8,8 @@ Long-term memory for [Eve](https://github.com/vercel/eve) agents, backed by
 
 On each turn, relevant memories are recalled automatically. The model saves
 new ones by calling a `propose_memory` tool, and a pluggable **gate** decides
-which proposals are stored. The gate is TypeSafe Jev by default; any
+which proposals are stored. The default gate is TypeSafe Jev when
+`TYPESAFE_API_KEY` is set, and a local rule-based gate otherwise. Any
 OpenAI-compatible LLM or your own function also works.
 
 Identity comes only from Eve's authenticated session; the model never supplies
@@ -149,10 +150,17 @@ sentences.
 
 ### 5. Gate credentials
 
-The default Jev gate calls `typesafe-ai/jev` through Vercel AI Gateway, using
-Eve's normal model authentication (`/login` in `eve dev`, or
-`AI_GATEWAY_API_KEY`). To use OpenAI or another LLM instead, see
-[Gates](#gates).
+None needed to start. Without credentials, proposals go through
+`heuristicGate()`, which runs locally. Set `TYPESAFE_API_KEY` (or
+`TYPESAFE_AI_API_KEY`) and the default switches to `jevGate()` on TypeSafe's
+API:
+
+```sh
+TYPESAFE_API_KEY=...
+```
+
+Passing `gate` always overrides the default. To use OpenAI or another LLM,
+see [Gates](#gates).
 
 ## Authentication
 
@@ -348,7 +356,7 @@ mnemonMemory({
   recallCharBudget: 4000,  // total recalled characters per turn
   relatedLimit: 5,         // same-scope memories shown to the gate
   recallFilter: undefined, // drops unhelpful recalled memories; see Recall filter
-  gate: jevGate(),         // decides what is stored; see Gates
+  gate: undefined,         // decides what is stored; default depends on TYPESAFE_API_KEY, see Gates
   onEvent: (event) => {},  // metadata-only metrics; see Observability
 });
 ```
@@ -377,7 +385,7 @@ interface MemoryGateInput {
 }
 ```
 
-Both built-in gates ask five questions (`GATE_QUESTIONS`) and apply the same
+All built-in gates answer the same five flags and apply the same
 policy (`decide`). A fact is stored only if it is:
 
 | Flag | Must be |
@@ -398,7 +406,7 @@ dropped and the Mnemon default applies; it never rejects a fact.
 ### Superseding
 
 When a fact changes a value or reverses a decision, the old memory would keep
-being recalled next to the new one. So both built-in gates also ask, for each
+being recalled next to the new one. So `jevGate` and `llmGate` also ask, for each
 related memory, whether the candidate makes it no longer true
 (`supersedeQuestion(i)`), and return those ids in `supersedes`:
 
@@ -415,15 +423,67 @@ Nothing is forgotten when the fact is rejected or turns out to be a duplicate.
 Forgotten memories stay in the database with `deleted_at` set and appear in
 `log({ operation: "forget" })`.
 
-### jevGate (default)
+### Default gate
 
-Uses `evaluate` from `eve/ai`, which means TypeSafe Jev through Vercel AI
-Gateway:
+| Environment | Default |
+| --- | --- |
+| `TYPESAFE_API_KEY` or `TYPESAFE_AI_API_KEY` set | `jevGate({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") })` |
+| neither set | `heuristicGate()` |
+
+The variable is read once, when `mnemonMemory()` is called. `gate` always wins.
+
+### heuristicGate
+
+Local rules only: no model call, no network, no cost.
 
 ```ts
+import { heuristicGate } from "@mnemon/eve";
+
+mnemonMemory({ client: mnemon, audience: "personal", gate: heuristicGate() });
+```
+
+| Flag | Rule |
+| --- | --- |
+| `sensitive` | known secret formats, card numbers, "PIN/password/passphrase is …", or a secret word ("door code", "PIN", "recovery code", …) near a digit run or random-looking token |
+| `transient` | "right now", "currently", "today", "this morning", "step 3 of 5", percentages, "is running/uploading/…", build or job numbers |
+| `duplicate` | every content word of the candidate already appears in one related memory, or near-identical word sets |
+| `appropriateAudience` | first person or "Name prefers/likes/…" counts as personal; "we/our", team/company, policy, service, and deploy vocabulary counts as organizational |
+| `durable` | not transient, not a question or small talk, at least three content words |
+
+Category comes from a keyword map, and importance is 3–5 based on words like
+"must", "policy", "never", or "compliance". The gate never supersedes
+memories.
+
+On the labeled benchmark in `test/gate-benchmark.ts` (58 proposals), the
+results were:
+
+| Gate | Correct |
+| --- | --- |
+| accept everything | 25 / 58 |
+| `heuristicGate()` | 55 / 58 |
+| `jevGate()` (jev-latest) | 55 / 58 |
+
+The heuristic rules were tuned on those same cases, so treat 55 as its best
+case. Expect it to do worse on real traffic. Its misses are paraphrased
+duplicates, such as "PRs need one approving review" next to "All pull requests
+need one approving review". Mnemon's embedding dedupe in `remember` catches
+some of these after the gate. Jev was not tuned on the benchmark, and it also
+handles judgments that keywords cannot: whether a fact will matter later,
+contradictions, and new phrasings of secrets. To score your own gate, run
+`scoreGate(gate)` from that file.
+
+### jevGate
+
+Uses `evaluate` from `eve/ai`. With no `model`, that means TypeSafe Jev through
+Vercel AI Gateway, which uses Eve's model authentication (`/login` in
+`eve dev`, or `AI_GATEWAY_API_KEY`). To call TypeSafe directly, pass a model:
+
+```ts
+import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
 import { jevGate } from "@mnemon/eve";
 
-jevGate();                                  // typesafe-ai/jev, threshold 0.5
+jevGate();                                  // typesafe-ai/jev via AI Gateway, threshold 0.5
+jevGate({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") }); // TypeSafe API directly
 jevGate({ threshold: 0.7 });                // stricter: a flag counts as true at p ≥ 0.7
 jevGate({ model: "typesafe-ai/jev" });      // any AI SDK evaluation model id or instance
 jevGate({ supersedeThreshold: 0.9 });       // p needed to forget a related memory (default 0.8)

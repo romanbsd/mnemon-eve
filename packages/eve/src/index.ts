@@ -15,6 +15,7 @@ export {
 	type MemoryGateInput,
 	supersedeQuestion,
 } from "./gate.js";
+export { heuristicGate, SECRET_PATTERNS } from "./heuristic-gate.js";
 export {
 	CAUSAL_RELATION_CRITERIA,
 	DIFF_RELATION_CRITERIA,

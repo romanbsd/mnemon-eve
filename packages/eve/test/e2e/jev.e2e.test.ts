@@ -3,7 +3,9 @@ import type { MnemonClient } from "@mnemon/core";
 import { describe, expect, it } from "vitest";
 
 import { postgresAvailable, withMnemon } from "../../../core/test/integration/helpers.js";
+import { scoreGate } from "../gate-benchmark.js";
 import {
+	heuristicGate,
 	jevGate,
 	jevRecallFilter,
 	type MemoryAudience,
@@ -54,6 +56,12 @@ function slot(
 // Real TypeSafe Jev + Postgres under RLS. Assertions use clear-cut facts;
 // Jev is probabilistic, so borderline phrasing may flip.
 describe.skipIf(!available)("jevGate end to end", { timeout: 60_000 }, () => {
+	it("scores at least as well as the heuristic gate on the labeled benchmark", async () => {
+		const [jevScore, heuristic] = await Promise.all([scoreGate(jev), scoreGate(heuristicGate())]);
+		console.log({ jev: jevScore, heuristic: heuristic.correct });
+		expect(jevScore.correct).toBeGreaterThanOrEqual(heuristic.correct);
+	}, 300_000);
+
 	it("stores durable organization knowledge, classifies it, and isolates tenants", async () => {
 		await withMnemon({}, async (_m, { client }) => {
 			const orgA = slot(client, "organization", ["tenant-a"]);

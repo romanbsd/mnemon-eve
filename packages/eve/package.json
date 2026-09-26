@@ -24,6 +24,7 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
+		"@ai-sdk/typesafe-ai": "^3.0.8",
 		"@mnemon/core": "^0.1.0"
 	},
 	"peerDependencies": {
@@ -46,7 +47,6 @@
 		"access": "public"
 	},
 	"devDependencies": {
-		"@ai-sdk/typesafe-ai": "^3.0.8",
 		"ai": "^7.0.116",
 		"eve": "^0.67.0",
 		"zod": "^4.6.5"
