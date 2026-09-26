@@ -1,5 +1,6 @@
 import { INSIGHT_CATEGORIES, type InsightCategory } from "@mnemon/core";
-import { evaluate } from "eve/ai";
+
+import { jevEvaluator, type JevEvaluator, type JevModel } from "./jev.js";
 
 export type MemoryAudience = "organization" | "personal";
 
@@ -172,26 +173,19 @@ type JevQuestion =
  * tests. Questions are the gate flags, `category`, `importance`, and
  * `supersedes_<i>` per related memory.
  */
-export type MemoryEvaluator = (options: {
-	state: Record<string, unknown>;
-	questions: Record<string, JevQuestion>;
-	abortSignal?: AbortSignal;
-}) => Promise<{
-	answers: Record<
-		string,
-		| {
-				probability?: number;
-				choice?: string;
-				/** Fractional level index, 0 through 4, for `importance`. */
-				score?: number;
-		  }
-		| undefined
-	>;
-}>;
+export type MemoryEvaluator = JevEvaluator<
+	JevQuestion,
+	{
+		probability?: number;
+		choice?: string;
+		/** Fractional level index, 0 through 4, for `importance`. */
+		score?: number;
+	}
+>;
 
 export interface JevGateOptions {
-	/** Evaluation model. Default `typesafe-ai/jev` via Vercel AI Gateway. */
-	model?: Parameters<typeof evaluate>[0]["model"];
+	/** Evaluation model. Default `typesafeModel()`, else `typesafe-ai/jev` via Vercel AI Gateway. */
+	model?: JevModel;
 	/** Probability at which a flag counts as true. Default 0.5. */
 	threshold?: number;
 	/** Probability at which a related memory counts as superseded. Default 0.8: forgetting is destructive. */
@@ -214,10 +208,7 @@ const JEV_QUESTIONS: Record<string, JevQuestion> = {
 export function jevGate(options: JevGateOptions = {}): MemoryGate {
 	const threshold = options.threshold ?? 0.5;
 	const supersedeThreshold = options.supersedeThreshold ?? 0.8;
-	const evaluator: MemoryEvaluator =
-		options.evaluate ??
-		((input) =>
-			evaluate({ ...input, state: input.state as never, model: options.model }));
+	const evaluator: MemoryEvaluator = options.evaluate ?? jevEvaluator(options.model);
 	return async (input) => {
 		const { answers } = await evaluator({
 			state: gateState(input),

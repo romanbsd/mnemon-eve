@@ -4,6 +4,7 @@ import { type Clock, systemClock } from "./clock.js";
 import type { EmbeddingProvider } from "./embedding-provider.js";
 import type { DiffJudge } from "./engine/diff.js";
 import type { CausalJudge } from "./engine/edges.js";
+import { requirePositiveInt } from "./engine/validate.js";
 import { MnemonConfigurationError } from "./errors.js";
 import type { InsightCategory } from "./types.js";
 
@@ -69,12 +70,6 @@ export interface ResolvedConfig {
 
 const SCHEMA_RE = /^[a-z_][a-z0-9_]*$/;
 
-function requirePositiveInt(value: number, label: string): void {
-	if (!Number.isInteger(value) || value <= 0) {
-		throw new MnemonConfigurationError(`${label} must be a positive integer`);
-	}
-}
-
 export function resolveConfig(config: MnemonConfig): ResolvedConfig {
 	const hasUrl =
 		typeof config.databaseUrl === "string" && config.databaseUrl.length > 0;
@@ -94,11 +89,19 @@ export function resolveConfig(config: MnemonConfig): ResolvedConfig {
 
 	const provider = config.embeddingProvider;
 	if (provider !== undefined) {
-		requirePositiveInt(provider.dimensions, "embeddingProvider.dimensions");
+		requirePositiveInt(
+			provider.dimensions,
+			"embeddingProvider.dimensions",
+			MnemonConfigurationError,
+		);
 	}
 
 	if (config.embeddingDimensions !== undefined) {
-		requirePositiveInt(config.embeddingDimensions, "embeddingDimensions");
+		requirePositiveInt(
+			config.embeddingDimensions,
+			"embeddingDimensions",
+			MnemonConfigurationError,
+		);
 		if (
 			provider !== undefined &&
 			provider.dimensions !== config.embeddingDimensions

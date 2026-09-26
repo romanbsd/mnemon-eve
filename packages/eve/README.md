@@ -286,7 +286,7 @@ import { jevRecallFilter, mnemonMemory } from "@mnemon/eve";
 mnemonMemory({
   client: mnemon,
   audience: "personal",
-  recallFilter: jevRecallFilter(), // typesafe-ai/jev; { threshold: 0.5, model }
+  recallFilter: jevRecallFilter(), // typesafeModel(); { threshold: 0.5, model }
 });
 ```
 
@@ -427,7 +427,7 @@ Forgotten memories stay in the database with `deleted_at` set and appear in
 
 | Environment | Default |
 | --- | --- |
-| `TYPESAFE_API_KEY` or `TYPESAFE_AI_API_KEY` set | `jevGate({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") })` |
+| `TYPESAFE_API_KEY` or `TYPESAFE_AI_API_KEY` set | `jevGate()`, calling TypeSafe directly |
 | neither set | `heuristicGate()` |
 
 The variable is read once, when `mnemonMemory()` is called. `gate` always wins.
@@ -474,16 +474,16 @@ contradictions, and new phrasings of secrets. To score your own gate, run
 
 ### jevGate
 
-Uses `evaluate` from `eve/ai`. With no `model`, that means TypeSafe Jev through
-Vercel AI Gateway, which uses Eve's model authentication (`/login` in
-`eve dev`, or `AI_GATEWAY_API_KEY`). To call TypeSafe directly, pass a model:
+Uses `evaluate` from `eve/ai`. With no `model`, it uses `typesafeModel()`:
+TypeSafe's API directly when `TYPESAFE_API_KEY` (or `TYPESAFE_AI_API_KEY`) is
+set, otherwise TypeSafe Jev through Vercel AI Gateway, which uses Eve's model
+authentication (`/login` in `eve dev`, or `AI_GATEWAY_API_KEY`). The same
+default applies to `jevRecallFilter`, `jevDiffJudge`, and `jevCausalJudge`.
 
 ```ts
-import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
 import { jevGate } from "@mnemon/eve";
 
-jevGate();                                  // typesafe-ai/jev via AI Gateway, threshold 0.5
-jevGate({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") }); // TypeSafe API directly
+jevGate();                                  // typesafeModel(), threshold 0.5
 jevGate({ threshold: 0.7 });                // stricter: a flag counts as true at p ≥ 0.7
 jevGate({ model: "typesafe-ai/jev" });      // any AI SDK evaluation model id or instance
 jevGate({ supersedeThreshold: 0.9 });       // p needed to forget a related memory (default 0.8)

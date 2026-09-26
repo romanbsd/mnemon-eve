@@ -90,6 +90,18 @@ function requireNonEmptyTrimmed(
 	return trimmed;
 }
 
+/** Callers pick the error class: configuration and embedding setup fail differently. */
+export function requirePositiveInt(
+	value: number,
+	label: string,
+	error: new (message: string) => Error,
+): number {
+	if (!Number.isInteger(value) || value <= 0) {
+		throw new error(`${label} must be a positive integer`);
+	}
+	return value;
+}
+
 export function requireLimit(
 	limit: number,
 	max: number,

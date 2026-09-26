@@ -6,6 +6,7 @@ import {
 	PREVENTS_PHRASES,
 	SEMANTIC_EDGE_MIN_COSINE,
 } from "./constants.js";
+import { intersectionCount } from "./similarity.js";
 import { tokenize } from "./tokenize.js";
 
 export interface NewEdge {
@@ -41,15 +42,7 @@ function causalOverlap(a: Set<string>, b: Set<string>): number {
 	if (a.size === 0 || b.size === 0) {
 		return 0;
 	}
-	let inter = 0;
-	const smaller = a.size <= b.size ? a : b;
-	const larger = a.size <= b.size ? b : a;
-	for (const t of smaller) {
-		if (larger.has(t)) {
-			inter++;
-		}
-	}
-	return inter / Math.max(a.size, b.size);
+	return intersectionCount(a, b) / Math.max(a.size, b.size);
 }
 
 function temporalProximityWeight(hoursDiff: number): number {

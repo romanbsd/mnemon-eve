@@ -1,4 +1,5 @@
 import type { EmbeddingProvider } from "./embedding-provider.js";
+import { requirePositiveInt } from "./engine/validate.js";
 import { MnemonEmbeddingError } from "./errors.js";
 
 export const NOMIC_EMBED_TEXT_DIMENSIONS = 768;
@@ -47,13 +48,6 @@ function asFiniteVector(vector: unknown): number[] | undefined {
 		out.push(n);
 	}
 	return out;
-}
-
-function requirePositiveInt(value: number, label: string): number {
-	if (!Number.isInteger(value) || value <= 0) {
-		throw new MnemonEmbeddingError(`${label} must be a positive integer`);
-	}
-	return value;
 }
 
 function vectorField(payload: unknown, key: string): unknown {
@@ -135,11 +129,15 @@ function resolveDimensions(
 	protocol: EmbeddingProtocol,
 ): number {
 	if (explicit !== undefined) {
-		return requirePositiveInt(explicit, "dimensions");
+		return requirePositiveInt(explicit, "dimensions", MnemonEmbeddingError);
 	}
 	const raw = present(process.env.MNEMON_EMBED_DIMENSIONS);
 	if (raw) {
-		return requirePositiveInt(Number(raw), "MNEMON_EMBED_DIMENSIONS");
+		return requirePositiveInt(
+			Number(raw),
+			"MNEMON_EMBED_DIMENSIONS",
+			MnemonEmbeddingError,
+		);
 	}
 	return PROTOCOL[protocol].defaultDimensions;
 }
@@ -171,6 +169,7 @@ export class HttpEmbeddingProvider implements EmbeddingProvider {
 		this.timeoutMs = requirePositiveInt(
 			options.timeoutMs ?? (timeoutRaw ? Number(timeoutRaw) : 10_000),
 			"timeoutMs",
+			MnemonEmbeddingError,
 		);
 	}
 

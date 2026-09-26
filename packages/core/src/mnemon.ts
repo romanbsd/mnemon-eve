@@ -79,10 +79,11 @@ import {
 	runMigrations,
 } from "./postgres/migrations.js";
 import { toPublicEdge, toPublicInsight } from "./postgres/row-mappers.js";
-import type { InsightRecord } from "./postgres/schema.js";
+import type { InsightRecord, NewInsightRecord } from "./postgres/schema.js";
 import {
 	isUniqueViolation,
 	type MnemonStore,
+	type MnemonStoreTx,
 	PostgresMnemonStore,
 } from "./postgres/store.js";
 import { withTransaction, wrapDatabaseError } from "./postgres/transaction.js";
@@ -314,9 +315,7 @@ class MnemonService implements Mnemon {
 	async remember(input: RememberInput): Promise<RememberResult> {
 		const validated = validateRememberInput(input, this.config.defaults);
 		const now = this.config.clock.now();
-		const createdAt = validated.createdAt ?? now;
-		const normalized = normalizeContent(validated.content);
-		const hash = contentHash(normalized);
+		const hash = contentHash(normalizeContent(validated.content));
 
 		const exact = await this.store.findExactDuplicate(hash);
 		if (exact) {
@@ -341,79 +340,27 @@ class MnemonService implements Mnemon {
 		}
 		diff = await this.judgeDiff(validated.content, near, diff);
 
-		const known = new Set(await this.store.listKnownEntities());
-		const extracted = extractEntitiesIndexed(validated.content, known);
-		const entities = mergeEntities(validated.entities, extracted);
-		const searchTokens = sortedSearchTokens(
-			validated.content,
-			validated.tags,
-			entities,
-		);
-		const id = randomUUID();
-		const generated = await this.generateEdges(
-			{
-				id,
-				content: validated.content,
-				source: validated.source,
-				createdAt,
-				entities,
-				embedding,
-			},
+		const { record, generated } = await this.buildRecord(
+			validated,
+			{ id: randomUUID(), metadata: {}, managed: false },
+			embedding,
 			now,
 		);
 
 		try {
 			const { insight, edges } = await this.store.withTransaction(
 				async (tx) => {
-					if (embedding && this.config.embeddingProvider) {
-						await tx.establishEmbeddingSettings(
-							this.config.embeddingProvider.dimensions,
-							this.config.embeddingProvider.model,
-							now,
-						);
-					}
-
-					const inserted = await tx.insertInsight({
-						id,
-						content: validated.content,
-						normalizedContent: normalized,
-						contentHash: hash,
-						searchTokens,
-						category: validated.category,
-						importance: validated.importance,
-						tags: validated.tags,
-						entities,
-						source: validated.source,
-						metadata: {},
-						managed: false,
-						createdAt,
-						updatedAt: now,
-						embedding: embedding ?? null,
-						effectiveImportance: 0.5,
-					});
-
-					const persisted = await tx.upsertEdges(
-						generated.map((e) => ({ ...e, createdAt: now })),
-					);
-					const ei = effectiveImportance({
-						importance: inserted.importance,
-						accessCount: 0,
-						daysSinceAccess: 0,
-						edgeCount: persisted.length,
-					});
-					await tx.setEffectiveImportance(inserted.id, ei);
-					inserted.effectiveImportance = ei;
-
+					const persisted = await this.persistRecord(tx, record, generated, now);
 					await tx.appendOp(
 						"remember",
-						inserted.id,
+						record.id,
 						{
 							edge_counts: countEdgesByType(generated),
 							embedding_model: this.config.embeddingProvider?.model ?? null,
 						},
 						now,
 					);
-					return { insight: inserted, edges: persisted };
+					return persisted;
 				},
 			);
 
@@ -442,68 +389,22 @@ class MnemonService implements Mnemon {
 		const validated = validateRememberInput(input, this.config.defaults);
 		const metadata = validateMetadata(input.metadata);
 		const now = this.config.clock.now();
-		const createdAt = validated.createdAt ?? now;
-		const normalized = normalizeContent(validated.content);
 		const embedding = this.config.embeddingProvider
 			? await this.embed(validated.content, "document")
 			: undefined;
-		const known = new Set(await this.store.listKnownEntities());
-		const entities = mergeEntities(
-			validated.entities,
-			extractEntitiesIndexed(validated.content, known),
-		);
-		const generated = await this.generateEdges(
-			{
-				id,
-				content: validated.content,
-				source: validated.source,
-				createdAt,
-				entities,
-				embedding,
-			},
+		const { record, generated } = await this.buildRecord(
+			validated,
+			{ id, metadata, managed: true },
+			embedding,
 			now,
 		);
 		const insight = await this.store.withTransaction(async (tx) => {
-			if (embedding && this.config.embeddingProvider) {
-				await tx.establishEmbeddingSettings(
-					this.config.embeddingProvider.dimensions,
-					this.config.embeddingProvider.model,
-					now,
-				);
-			}
-			const persisted = await tx.upsertManagedInsight({
-				id,
-				content: validated.content,
-				normalizedContent: normalized,
-				contentHash: contentHash(normalized),
-				searchTokens: sortedSearchTokens(
-					validated.content,
-					validated.tags,
-					entities,
-				),
-				category: validated.category,
-				importance: validated.importance,
-				tags: validated.tags,
-				entities,
-				source: validated.source,
-				metadata,
-				managed: true,
-				createdAt,
-				updatedAt: now,
-				embedding: embedding ?? null,
-				effectiveImportance: 0.5,
-			});
-			const edges = await tx.upsertEdges(
-				generated.map((edge) => ({ ...edge, createdAt: now })),
+			const { insight: persisted, edges } = await this.persistRecord(
+				tx,
+				record,
+				generated,
+				now,
 			);
-			const importance = effectiveImportance({
-				importance: persisted.importance,
-				accessCount: persisted.accessCount,
-				daysSinceAccess: 0,
-				edgeCount: edges.length,
-			});
-			await tx.setEffectiveImportance(id, importance);
-			persisted.effectiveImportance = importance;
 			await tx.appendOp(
 				"upsert",
 				id,
@@ -513,6 +414,78 @@ class MnemonService implements Mnemon {
 			return persisted;
 		});
 		return toPublicInsight(insight);
+	}
+
+	/** Entities, search tokens, and candidate edges for a memory about to be written. */
+	private async buildRecord(
+		validated: ReturnType<typeof validateRememberInput>,
+		fields: Pick<NewInsightRecord, "id" | "metadata" | "managed">,
+		embedding: number[] | undefined,
+		now: Date,
+	) {
+		const known = new Set(await this.store.listKnownEntities());
+		const entities = mergeEntities(
+			validated.entities,
+			extractEntitiesIndexed(validated.content, known),
+		);
+		const createdAt = validated.createdAt ?? now;
+		const normalized = normalizeContent(validated.content);
+		const record: NewInsightRecord = {
+			...fields,
+			content: validated.content,
+			normalizedContent: normalized,
+			contentHash: contentHash(normalized),
+			searchTokens: sortedSearchTokens(
+				validated.content,
+				validated.tags,
+				entities,
+			),
+			category: validated.category,
+			importance: validated.importance,
+			tags: validated.tags,
+			entities,
+			source: validated.source,
+			createdAt,
+			updatedAt: now,
+			embedding: embedding ?? null,
+			effectiveImportance: 0.5,
+		};
+		const generated = await this.generateEdges(
+			{ ...record, embedding },
+			now,
+		);
+		return { record, generated };
+	}
+
+	/** Writes the record (managed ones upsert) and its edges, then scores it. */
+	private async persistRecord(
+		tx: MnemonStoreTx,
+		record: NewInsightRecord,
+		generated: Awaited<ReturnType<MnemonService["generateEdges"]>>,
+		now: Date,
+	) {
+		if (record.embedding && this.config.embeddingProvider) {
+			await tx.establishEmbeddingSettings(
+				this.config.embeddingProvider.dimensions,
+				this.config.embeddingProvider.model,
+				now,
+			);
+		}
+		const insight = record.managed
+			? await tx.upsertManagedInsight(record)
+			: await tx.insertInsight(record);
+		const edges = await tx.upsertEdges(
+			generated.map((edge) => ({ ...edge, createdAt: now })),
+		);
+		const ei = effectiveImportance({
+			importance: insight.importance,
+			accessCount: insight.accessCount,
+			daysSinceAccess: 0,
+			edgeCount: edges.length,
+		});
+		await tx.setEffectiveImportance(insight.id, ei);
+		insight.effectiveImportance = ei;
+		return { insight, edges };
 	}
 
 	async recall(input: RecallInput): Promise<RecallResult> {

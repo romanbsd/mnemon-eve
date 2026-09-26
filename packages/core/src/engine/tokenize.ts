@@ -29,15 +29,16 @@ export function tokenize(text: string): Set<string> {
 	const tokens = new Set<string>();
 	let word = "";
 	const cjk: string[] = [];
+	const pushWord = () => {
+		if (word.length > 0 && !STOPWORDS.has(word)) {
+			tokens.add(word);
+		}
+		word = "";
+	};
 
 	for (const ch of text.toLowerCase()) {
 		if (isHan(ch)) {
-			if (word.length > 0) {
-				if (!STOPWORDS.has(word)) {
-					tokens.add(word);
-				}
-				word = "";
-			}
+			pushWord();
 			cjk.push(ch);
 			continue;
 		}
@@ -46,17 +47,12 @@ export function tokenize(text: string): Set<string> {
 		}
 		if (isLetterOrDigit(ch)) {
 			word += ch;
-		} else if (word.length > 0) {
-			if (!STOPWORDS.has(word)) {
-				tokens.add(word);
-			}
-			word = "";
+		} else {
+			pushWord();
 		}
 	}
 
-	if (word.length > 0 && !STOPWORDS.has(word)) {
-		tokens.add(word);
-	}
+	pushWord();
 	if (cjk.length > 0) {
 		flushCjk(cjk, tokens);
 	}

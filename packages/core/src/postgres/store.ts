@@ -972,6 +972,38 @@ export class PostgresMnemonStore implements MnemonStore {
 	}
 }
 
+function insertInsightSql(s: string): string {
+	return `
+      INSERT INTO ${s}.insights (
+        namespace, id, content, normalized_content, content_hash, search_tokens, category, importance,
+        tags, entities, source, metadata, managed, created_at, updated_at, embedding, effective_importance
+      ) VALUES (
+        $1, $2::uuid, $3, $4, $5, $6::text[], $7, $8, $9::jsonb, $10::jsonb, $11, $12::jsonb, $13, $14, $15, $16::vector, $17
+      )`;
+}
+
+function insightParams(namespace: string, record: NewInsightRecord): unknown[] {
+	return [
+		namespace,
+		record.id,
+		record.content,
+		record.normalizedContent,
+		record.contentHash,
+		record.searchTokens,
+		record.category,
+		record.importance,
+		JSON.stringify(record.tags),
+		JSON.stringify(record.entities),
+		record.source,
+		JSON.stringify(record.metadata),
+		record.managed,
+		record.createdAt,
+		record.updatedAt,
+		record.embedding ? vec(record.embedding) : null,
+		record.effectiveImportance,
+	];
+}
+
 class PostgresMnemonStoreTx implements MnemonStoreTx {
 	constructor(
 		private readonly client: PoolClient,
@@ -982,34 +1014,8 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 	async insertInsight(record: NewInsightRecord): Promise<InsightRecord> {
 		try {
 			const result = await this.client.query<Record<string, unknown>>(
-				`
-        INSERT INTO ${this.s}.insights (
-          namespace, id, content, normalized_content, content_hash, search_tokens, category, importance,
-          tags, entities, source, metadata, managed, created_at, updated_at, embedding, effective_importance
-        ) VALUES (
-          $1, $2::uuid, $3, $4, $5, $6::text[], $7, $8, $9::jsonb, $10::jsonb, $11, $12::jsonb, $13, $14, $15, $16::vector, $17
-        )
-        RETURNING ${insightSelect(true)}
-        `,
-				[
-					this.namespace,
-					record.id,
-					record.content,
-					record.normalizedContent,
-					record.contentHash,
-					record.searchTokens,
-					record.category,
-					record.importance,
-					JSON.stringify(record.tags),
-					JSON.stringify(record.entities),
-					record.source,
-					JSON.stringify(record.metadata),
-					record.managed,
-					record.createdAt,
-					record.updatedAt,
-					record.embedding ? vec(record.embedding) : null,
-					record.effectiveImportance,
-				],
+				`${insertInsightSql(this.s)} RETURNING ${insightSelect(true)}`,
+				insightParams(this.namespace, record),
 			);
 			const row = result.rows[0];
 			if (!row) {
@@ -1030,14 +1036,7 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 	async upsertManagedInsight(record: NewInsightRecord): Promise<InsightRecord> {
 		const result = await this.client.query<Record<string, unknown>>(
 			`
-      INSERT INTO ${this.s}.insights (
-        namespace, id, content, normalized_content, content_hash, search_tokens,
-        category, importance, tags, entities, source, metadata, managed,
-        created_at, updated_at, embedding, effective_importance
-      ) VALUES (
-        $1, $2::uuid, $3, $4, $5, $6::text[], $7, $8, $9::jsonb, $10::jsonb,
-        $11, $12::jsonb, true, $13, $14, $15::vector, $16
-      )
+      ${insertInsightSql(this.s)}
       ON CONFLICT (tenant_id, namespace, id) DO UPDATE SET
         content = EXCLUDED.content,
         normalized_content = EXCLUDED.normalized_content,
@@ -1056,24 +1055,7 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
       WHERE ${this.s}.insights.managed = true
       RETURNING ${insightSelect(true)}
       `,
-			[
-				this.namespace,
-				record.id,
-				record.content,
-				record.normalizedContent,
-				record.contentHash,
-				record.searchTokens,
-				record.category,
-				record.importance,
-				JSON.stringify(record.tags),
-				JSON.stringify(record.entities),
-				record.source,
-				JSON.stringify(record.metadata),
-				record.createdAt,
-				record.updatedAt,
-				record.embedding ? vec(record.embedding) : null,
-				record.effectiveImportance,
-			],
+			insightParams(this.namespace, { ...record, managed: true }),
 		);
 		const row = result.rows[0];
 		if (!row) {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import type { Clock } from "../../src/clock.js";
 import { quoteIdent } from "../../src/config.js";
 import type { EmbeddingProvider } from "../../src/embedding-provider.js";
@@ -21,17 +21,18 @@ export const TEST_NAMESPACE = "test-application";
 
 let prepared: Promise<boolean> | undefined;
 
+function newPool(extra: PoolConfig = {}): Pool {
+	return new Pool({ connectionString: DATABASE_URL, ...extra });
+}
+
 /** Superuser pool for fixtures and out-of-band verification. */
 export function adminPool(): Pool {
-	return new Pool({ connectionString: DATABASE_URL });
+	return newPool();
 }
 
 /** Pool whose sessions run as APP_ROLE, so RLS applies. */
 export function appPool(): Pool {
-	return new Pool({
-		connectionString: DATABASE_URL,
-		options: `-c role=${APP_ROLE}`,
-	});
+	return newPool({ options: `-c role=${APP_ROLE}` });
 }
 
 export function postgresAvailable(): Promise<boolean> {
@@ -43,10 +44,7 @@ async function prepare(): Promise<boolean> {
 	if (!DATABASE_URL) {
 		return false;
 	}
-	const pool = new Pool({
-		connectionString: DATABASE_URL,
-		connectionTimeoutMillis: 1500,
-	});
+	const pool = newPool({ connectionTimeoutMillis: 1500 });
 	try {
 		await pool.query("SELECT 1");
 	} catch {

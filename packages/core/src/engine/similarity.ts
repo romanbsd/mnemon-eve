@@ -17,7 +17,7 @@ export function symmetricTokenSimilarity(
 	return Math.max(inter / a.size, inter / b.size);
 }
 
-function intersectionCount(a: Set<string>, b: Set<string>): number {
+export function intersectionCount(a: Set<string>, b: Set<string>): number {
 	let inter = 0;
 	const smaller = a.size <= b.size ? a : b;
 	const larger = a.size <= b.size ? b : a;

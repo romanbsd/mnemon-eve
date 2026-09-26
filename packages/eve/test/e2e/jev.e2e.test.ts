@@ -1,4 +1,3 @@
-import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
 import type { MnemonClient } from "@mnemon/core";
 import { describe, expect, it } from "vitest";
 
@@ -12,14 +11,14 @@ import {
 	type MemoryGate,
 	mnemonMemory,
 	type ProposalResult,
+	typesafeModel,
 } from "../../src/index.js";
 
-const apiKey = process.env.TYPESAFE_AI_API_KEY ?? process.env.TYPESAFE_API_KEY;
-const available = Boolean(apiKey) && (await postgresAvailable());
+const available = typesafeModel() !== undefined && (await postgresAvailable());
 
-const jev = jevGate({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") });
+const jev = jevGate();
 
-const recallFilter = jevRecallFilter({ model: createTypeSafeAi({ apiKey }).evaluationModel("jev-latest") });
+const recallFilter = jevRecallFilter();
 
 function slot(
 	client: MnemonClient,

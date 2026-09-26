@@ -17,6 +17,12 @@ export {
 } from "./gate.js";
 export { heuristicGate, SECRET_PATTERNS } from "./heuristic-gate.js";
 export {
+	type JevEvaluator,
+	jevEvaluator,
+	type JevModel,
+	typesafeModel,
+} from "./jev.js";
+export {
 	CAUSAL_RELATION_CRITERIA,
 	DIFF_RELATION_CRITERIA,
 	type JevJudgeOptions,

@@ -6,7 +6,8 @@ import {
 	type DiffJudge,
 	type DiffRelation,
 } from "@mnemon/core";
-import { evaluate } from "eve/ai";
+
+import { jevEvaluator, type JevEvaluator, type JevModel } from "./jev.js";
 
 export const DIFF_RELATION_CRITERIA: Record<DiffRelation, string> = {
 	duplicate: "States substantially the same information, even if worded differently.",
@@ -34,28 +35,19 @@ interface ChoiceQuestion {
 }
 
 /** Subset of `evaluate` from `eve/ai` the judges need; inject a fake in tests. */
-export type JudgeEvaluator = (options: {
-	state: Record<string, unknown>;
-	questions: Record<string, ChoiceQuestion>;
-}) => Promise<{
-	answers: Record<
-		string,
-		{ choice: string; probabilities?: Record<string, number> } | undefined
-	>;
-}>;
+export type JudgeEvaluator = JevEvaluator<
+	ChoiceQuestion,
+	{ choice: string; probabilities?: Record<string, number> }
+>;
 
 export interface JevJudgeOptions {
-	/** Evaluation model. Default `typesafe-ai/jev` via Vercel AI Gateway. */
-	model?: Parameters<typeof evaluate>[0]["model"];
+	/** Evaluation model. Default `typesafeModel()`, else `typesafe-ai/jev` via Vercel AI Gateway. */
+	model?: JevModel;
 	evaluate?: JudgeEvaluator;
 }
 
 function evaluatorFor(options: JevJudgeOptions): JudgeEvaluator {
-	return (
-		options.evaluate ??
-		((input) =>
-			evaluate({ ...input, state: input.state as never, model: options.model }))
-	);
+	return options.evaluate ?? jevEvaluator(options.model);
 }
 
 /**
