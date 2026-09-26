@@ -137,7 +137,9 @@ export interface MnemonStore {
 	loadEdgeContext(input: {
 		excludeId: string;
 		source: string;
+		createdAt: Date;
 		since: Date;
+		until: Date;
 		entities: readonly string[];
 	}): Promise<EdgeContext>;
 	/** Oldest active insights with no embedding, and how many there are in total. */
@@ -161,6 +163,8 @@ export interface MnemonStoreTx {
 	insertInsight(record: NewInsightRecord): Promise<InsightRecord>;
 	upsertManagedInsight(record: NewInsightRecord): Promise<InsightRecord>;
 	upsertEdges(edges: readonly NewEdgeRecord[]): Promise<EdgeRecord[]>;
+	/** Removes the backbone edges between two insights, both directions. */
+	deleteBackbone(a: string, b: string): Promise<void>;
 	appendOp(
 		operation: string,
 		insightId: string | null,
@@ -670,7 +674,9 @@ export class PostgresMnemonStore implements MnemonStore {
 	async loadEdgeContext(input: {
 		excludeId: string;
 		source: string;
+		createdAt: Date;
 		since: Date;
+		until: Date;
 		entities: readonly string[];
 	}): Promise<EdgeContext> {
 		const result = await this.client.query<Record<string, unknown>>(
@@ -680,13 +686,23 @@ export class PostgresMnemonStore implements MnemonStore {
           SELECT id, content, created_at
           FROM ${this.s}.insights
           WHERE namespace = $1 AND deleted_at IS NULL AND id <> $2::uuid AND source = $3
+            AND created_at <= $9
           ORDER BY created_at DESC, id ASC
+          LIMIT 1
+      ),
+      following AS (
+          SELECT id, content, created_at
+          FROM ${this.s}.insights
+          WHERE namespace = $1 AND deleted_at IS NULL AND id <> $2::uuid AND source = $3
+            AND created_at > $9
+          ORDER BY created_at ASC, id ASC
           LIMIT 1
       ),
       windowed AS (
           SELECT id, content, created_at
           FROM ${this.s}.insights
-          WHERE namespace = $1 AND deleted_at IS NULL AND id <> $2::uuid AND created_at >= $4
+          WHERE namespace = $1 AND deleted_at IS NULL AND id <> $2::uuid
+            AND created_at >= $4 AND created_at <= $10
           ORDER BY created_at DESC, id ASC
           LIMIT $5
       ),
@@ -714,6 +730,8 @@ export class PostgresMnemonStore implements MnemonStore {
       SELECT 'latest' AS bucket, id, content, created_at, NULL::text AS entity, NULL::uuid AS target_id, NULL::int AS ord, NULL::int AS rn
       FROM latest
       UNION ALL
+      SELECT 'next', id, content, created_at, NULL::text, NULL::uuid, NULL::int, NULL::int FROM following
+      UNION ALL
       SELECT 'window', id, content, created_at, NULL::text, NULL::uuid, NULL::int, NULL::int FROM windowed
       UNION ALL
       SELECT 'causal', id, content, created_at, NULL::text, NULL::uuid, NULL::int, NULL::int FROM causal
@@ -732,6 +750,8 @@ export class PostgresMnemonStore implements MnemonStore {
 				CAUSAL_LOOKBACK,
 				input.entities,
 				MAX_ENTITY_LINKS,
+				input.createdAt,
+				input.until,
 			],
 		);
 
@@ -745,6 +765,12 @@ export class PostgresMnemonStore implements MnemonStore {
 			const bucket = String(row.bucket);
 			if (bucket === "latest" && row.id) {
 				context.latestSameSource = {
+					id: dbString(row.id, "id"),
+					content: dbString(row.content, "content"),
+					createdAt: asDate(row.created_at, "created_at"),
+				};
+			} else if (bucket === "next" && row.id) {
+				context.nextSameSource = {
 					id: dbString(row.id, "id"),
 					content: dbString(row.content, "content"),
 					createdAt: asDate(row.created_at, "created_at"),
@@ -1109,6 +1135,15 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 			(edge) => active.has(edge.sourceId) && active.has(edge.targetId),
 		);
 		return this.upsertEdgeRows(deduped);
+	}
+
+	async deleteBackbone(a: string, b: string): Promise<void> {
+		await this.client.query(
+			`DELETE FROM ${this.s}.edges
+       WHERE namespace = $1 AND edge_type = 'temporal' AND metadata->>'sub_type' = 'backbone'
+         AND ((source_id = $2::uuid AND target_id = $3::uuid) OR (source_id = $3::uuid AND target_id = $2::uuid))`,
+			[this.namespace, a, b],
+		);
 	}
 
 	private async upsertEdgeRows(

@@ -450,10 +450,7 @@ class MnemonService implements Mnemon {
 			embedding: embedding ?? null,
 			effectiveImportance: 0.5,
 		};
-		const generated = await this.generateEdges(
-			{ ...record, embedding },
-			now,
-		);
+		const generated = await this.generateEdges({ ...record, embedding });
 		return { record, generated };
 	}
 
@@ -474,6 +471,19 @@ class MnemonService implements Mnemon {
 		const insight = record.managed
 			? await tx.upsertManagedInsight(record)
 			: await tx.insertInsight(record);
+		// A backdated insight lands between two neighbours: it replaces their link.
+		const backbone = (direction: "into" | "out") =>
+			generated.find(
+				(e) =>
+					e.metadata.sub_type === "backbone" &&
+					e.metadata.direction === "precedes" &&
+					(direction === "into" ? e.targetId : e.sourceId) === record.id,
+			);
+		const previous = backbone("into")?.sourceId;
+		const next = backbone("out")?.targetId;
+		if (previous && next) {
+			await tx.deleteBackbone(previous, next);
+		}
 		const edges = await tx.upsertEdges(
 			generated.map((edge) => ({ ...edge, createdAt: now })),
 		);
@@ -644,8 +654,8 @@ class MnemonService implements Mnemon {
 	async link(input: LinkInput): Promise<Edge> {
 		const validated = validateLinkInput(input);
 		const now = this.config.clock.now();
-		const edge = await this.store.withTransaction((tx) =>
-			tx.linkAndLog(
+		const edge = await this.store.withTransaction(async (tx) => {
+			const linked = await tx.linkAndLog(
 				{
 					sourceId: validated.sourceId,
 					targetId: validated.targetId,
@@ -655,8 +665,12 @@ class MnemonService implements Mnemon {
 					createdAt: now,
 				},
 				now,
-			),
-		);
+			);
+			// The edge bonus changed for both ends.
+			await this.refreshEffectiveImportance(tx, validated.sourceId, now);
+			await this.refreshEffectiveImportance(tx, validated.targetId, now);
+			return linked;
+		});
 		return toPublicEdge(edge);
 	}
 
@@ -861,24 +875,43 @@ class MnemonService implements Mnemon {
 		const now = this.config.clock.now();
 		const kept = await this.store.withTransaction(async (tx) => {
 			await tx.incrementAccess([id], now, KEEP_ACCESS_BOOST);
-			const record = await this.store.getActiveInsight(id);
+			const record = await this.refreshEffectiveImportance(tx, id, now);
 			if (!record) {
 				return null;
 			}
-			const ei = effectiveImportance({
-				importance: record.importance,
-				accessCount: record.accessCount,
-				daysSinceAccess: 0,
-				edgeCount: (await this.store.getEdgesForNodeIds([id])).length,
-			});
-			await tx.setEffectiveImportance(id, ei);
-			await tx.appendOp("gc_keep", id, { effective_importance: ei }, now);
+			await tx.appendOp(
+				"gc_keep",
+				id,
+				{ effective_importance: record.effectiveImportance },
+				now,
+			);
 			return record;
 		});
 		if (!kept) {
 			throw new MnemonNotFoundError(`insight ${id} not found`, id);
 		}
 		return toPublicInsight(kept);
+	}
+
+	/** Recomputes and stores the cached effective importance of one active insight. */
+	private async refreshEffectiveImportance(
+		tx: MnemonStoreTx,
+		id: string,
+		now: Date,
+	): Promise<InsightRecord | null> {
+		const record = await this.store.getActiveInsight(id);
+		if (!record) {
+			return null;
+		}
+		const since = record.lastAccessedAt ?? record.createdAt;
+		record.effectiveImportance = effectiveImportance({
+			importance: record.importance,
+			accessCount: record.accessCount,
+			daysSinceAccess: Math.max(0, (now.getTime() - since.getTime()) / 86_400_000),
+			edgeCount: (await this.store.getEdgesForNodeIds([id])).length,
+		});
+		await tx.setEffectiveImportance(id, record.effectiveImportance);
+		return record;
 	}
 
 	async status(): Promise<MnemonStatus> {
@@ -1025,19 +1058,23 @@ class MnemonService implements Mnemon {
 			entities: readonly string[];
 			embedding?: number[] | null;
 		},
-		now: Date,
 	) {
-		const since = new Date(now.getTime() - TEMPORAL_WINDOW_HOURS * 3_600_000);
+		// Window around the insight's own time, so backdated writes find their
+		// contemporaries rather than whatever was stored in the last day.
+		const windowMs = TEMPORAL_WINDOW_HOURS * 3_600_000;
 		const context = await this.store.loadEdgeContext({
 			excludeId: insight.id,
 			source: insight.source,
-			since,
+			createdAt: insight.createdAt,
+			since: new Date(insight.createdAt.getTime() - windowMs),
+			until: new Date(insight.createdAt.getTime() + windowMs),
 			entities: insight.entities,
 		});
 		const temporal = buildTemporalEdges({
 			newId: insight.id,
 			newCreatedAt: insight.createdAt,
 			latestSameSource: context.latestSameSource,
+			nextSameSource: context.nextSameSource,
 			recentWithin24h: context.recentWithin24h,
 		});
 		const entity = buildEntityEdges({

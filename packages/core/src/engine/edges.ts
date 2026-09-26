@@ -71,6 +71,8 @@ export function buildTemporalEdges(input: {
 	newId: string;
 	newCreatedAt: Date;
 	latestSameSource?: { id: string };
+	/** Set when the new insight is backdated before an existing one. */
+	nextSameSource?: { id: string };
 	recentWithin24h: readonly { id: string; createdAt: Date }[];
 }): NewEdge[] {
 	const edges: NewEdge[] = [];
@@ -86,9 +88,21 @@ export function buildTemporalEdges(input: {
 			),
 		);
 	}
-	const backboneId = input.latestSameSource?.id;
+	if (input.nextSameSource && input.nextSameSource.id !== input.newId) {
+		edges.push(
+			...bidirectional(
+				input.newId,
+				input.nextSameSource.id,
+				"temporal",
+				1,
+				{ sub_type: "backbone", direction: "precedes" },
+				{ sub_type: "backbone", direction: "succeeds" },
+			),
+		);
+	}
+	const backbone = new Set([input.latestSameSource?.id, input.nextSameSource?.id]);
 	for (const near of input.recentWithin24h) {
-		if (near.id === backboneId || near.id === input.newId) {
+		if (backbone.has(near.id) || near.id === input.newId) {
 			continue;
 		}
 		const hours = hoursDifference(input.newCreatedAt, near.createdAt);

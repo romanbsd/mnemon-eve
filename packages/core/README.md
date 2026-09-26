@@ -167,7 +167,7 @@ const result = await memory.remember({
   tags: ["renewal"],  // ≤ 20
   entities: ["Acme"], // ≤ 50; merged with automatic extraction
   source: "crm-sync", // ≤ 200 chars; filterable in recall/search/list
-  createdAt: "2024-06-01T00:00:00Z", // optional backdating
+  createdAt: "2024-06-01T00:00:00Z", // optional backdating; links to same-source neighbours by this time
   deduplicate: true,  // skip if an equivalent memory exists
 });
 

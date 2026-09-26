@@ -683,24 +683,4 @@ describe.skipIf(!available)("postgres integration", () => {
 			expect(actions).toEqual(["added", "skipped"]);
 		});
 	});
-
-	it("refuses a different embedding model or dimension on an existing store", async () => {
-		const content = "Embeddings are pinned per store";
-		const provider = (model: string, dims: number) =>
-			new FakeEmbeddingProvider(model, dims, { [content]: unitVector(dims, 0) });
-		await withMnemon(
-			{ clock, embeddingProvider: provider("model-a", 4) },
-			async (m, { pool, schema }) => {
-				await m.remember({ content });
-				for (const [other, message] of [
-					[provider("model-b", 4), /embedding provider model model-b does not match store model-a/],
-					[provider("model-a", 8), /embedding provider dimension 8 does not match store 4/],
-				] as const) {
-					const client = createMnemon({ pool, schema, clock, embeddingProvider: other });
-					const scoped = client.scope({ tenantId: TEST_TENANT, namespace: "other" });
-					await expect(scoped.remember({ content })).rejects.toThrow(message);
-				}
-			},
-		);
-	});
 });

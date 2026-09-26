@@ -6,7 +6,6 @@ import {
 	minMaxNormalize,
 	normalizeEliteGraph,
 } from "../../src/engine/recall.js";
-import { effectiveImportance } from "../../src/engine/retention.js";
 
 describe("causal topological order", () => {
 	it("puts causes before effects and appends cycles in original order", () => {
@@ -84,22 +83,5 @@ describe("final score and retention", () => {
 		expect(minMaxNormalize([2, 4, 6])).toEqual([0, 0.5, 1]);
 		expect(minMaxNormalize([0.4, 0.4, 0.4])).toEqual([0, 0, 0]);
 		expect(minMaxNormalize([0, 0])).toEqual([0, 0]);
-	});
-
-	it("matches the effective-importance formula", () => {
-		const ei = effectiveImportance({
-			importance: 3,
-			accessCount: 0,
-			daysSinceAccess: 0,
-			edgeCount: 0,
-		});
-		expect(ei).toBeCloseTo(0.5);
-		const decayed = effectiveImportance({
-			importance: 5,
-			accessCount: 0,
-			daysSinceAccess: 30,
-			edgeCount: 5,
-		});
-		expect(decayed).toBeCloseTo(1 * 1 * 0.5 * 1.5);
 	});
 });

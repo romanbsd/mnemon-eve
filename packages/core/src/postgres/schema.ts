@@ -85,7 +85,10 @@ export interface ScoredInsight {
 }
 
 export interface EdgeContext {
+	/** Newest same-source insight created at or before the new one. */
 	latestSameSource?: { id: string; content: string; createdAt: Date };
+	/** Oldest same-source insight created after the new one (backdated writes). */
+	nextSameSource?: { id: string; content: string; createdAt: Date };
 	recentWithin24h: { id: string; content: string; createdAt: Date }[];
 	causalPrevious: { id: string; content: string }[];
 	entityPairs: { entity: string; targetId: string }[];
