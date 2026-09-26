@@ -1,0 +1,29 @@
+{
+  "name": "mnemon-eve-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/eve"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "check-types": "npm run check-types --workspaces",
+    "test": "vitest run",
+    "clean": "rm -rf packages/*/dist",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.11.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

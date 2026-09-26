@@ -1,0 +1,1003 @@
+import { createHash, randomUUID } from "node:crypto";
+
+import { Pool, type PoolClient } from "pg";
+import pgvector from "pgvector/pg";
+
+import {
+	type MnemonConfig,
+	quoteIdent,
+	type ResolvedConfig,
+	resolveConfig,
+} from "./config.js";
+import { makeBriefExcerpt } from "./engine/brief.js";
+import {
+	ALGORITHM_VERSION,
+	ANCHOR_TOP_K,
+	DEDUP_CANDIDATE_LIMIT,
+	DEFAULT_RELATED_DEPTH,
+	DEFAULT_RELATED_LIMIT,
+	MAX_RELATED_DEPTH,
+	MAX_RELATED_LIMIT,
+	MAX_SEMANTIC_EDGES,
+	SEARCH_FTS_WEIGHT,
+	SEARCH_KEYWORD_WEIGHT,
+	SEMANTIC_CANDIDATE_MIN_COSINE,
+	TEMPORAL_WINDOW_HOURS,
+} from "./engine/constants.js";
+import {
+	classifyDiff,
+	classifySafeDuplicate,
+	scoreDuplicateCandidate,
+} from "./engine/diff.js";
+import {
+	buildCausalEdges,
+	buildEntityEdges,
+	buildSemanticEdges,
+	buildTemporalEdges,
+	countEdgesByType,
+	emptyEdgeCounts,
+} from "./engine/edges.js";
+import { extractEntitiesIndexed, mergeEntities } from "./engine/entities.js";
+import { detectIntent } from "./engine/intent.js";
+import { contentHash, normalizeContent } from "./engine/normalize.js";
+import {
+	causalTopologicalOrder,
+	compareRecallHits,
+	composeFinalScore,
+	normalizeEliteGraph,
+} from "./engine/recall.js";
+import { effectiveImportance } from "./engine/retention.js";
+import { sortedSearchTokens, sortedTokens } from "./engine/tokenize.js";
+import {
+	validateEmbedding,
+	validateLinkInput,
+	validateListInput,
+	validateLogInput,
+	validateMetadata,
+	validateRecallInput,
+	validateRememberInput,
+	validateSearchInput,
+	validateAuthorization,
+	validateUuid,
+} from "./engine/validate.js";
+import {
+	MnemonConfigurationError,
+	MnemonEmbeddingError,
+	MnemonError,
+	MnemonNotFoundError,
+} from "./errors.js";
+import {
+	assertRlsEnforced,
+	ensureUserScopePolicy,
+	runMigrations,
+} from "./postgres/migrations.js";
+import { toPublicEdge, toPublicInsight } from "./postgres/row-mappers.js";
+import type { InsightRecord } from "./postgres/schema.js";
+import {
+	isUniqueViolation,
+	type MnemonStore,
+	PostgresMnemonStore,
+} from "./postgres/store.js";
+import { withTransaction, wrapDatabaseError } from "./postgres/transaction.js";
+import {
+	EDGE_TYPES,
+	type Edge,
+	type EdgeType,
+	type ForgetResult,
+	type Insight,
+	type LinkInput,
+	type ListInput,
+	type LogInput,
+	type ManagedInsightInput,
+	type Mnemon,
+	type MnemonAuthorization,
+	type MnemonClient,
+	type MnemonStatus,
+	type OnceResult,
+	type OpLogEntry,
+	type RecallHit,
+	type RecallInput,
+	type RecallResult,
+	type RelatedInsight,
+	type RememberInput,
+	type RememberResult,
+	type SearchInput,
+	type SearchResult,
+	type SimilarMemory,
+} from "./types.js";
+
+function primitiveSetting(value: unknown): string {
+	if (typeof value === "string" || typeof value === "number") {
+		return String(value);
+	}
+	throw new MnemonConfigurationError("stored embedding setting is invalid");
+}
+
+export function createMnemon(config: MnemonConfig): MnemonClient {
+	return new PostgresMnemonClient(resolveConfig(config));
+}
+
+const SCOPED_METHODS = [
+	"remember",
+	"upsert",
+	"recall",
+	"link",
+	"related",
+	"forget",
+	"get",
+	"search",
+	"list",
+	"log",
+	"status",
+	"once",
+] as const satisfies readonly (keyof Mnemon)[];
+
+class PostgresMnemonClient implements MnemonClient {
+	private readonly ownsPool: boolean;
+	private readonly pool: Pool;
+	private readonly typedClients = new WeakSet<PoolClient>();
+	private initPromise: Promise<void> | undefined;
+	private closed = false;
+
+	constructor(private readonly config: ResolvedConfig) {
+		this.ownsPool = config.pool === undefined;
+		this.pool = config.pool ?? new Pool({ connectionString: config.databaseUrl });
+	}
+
+	async initialize(): Promise<void> {
+		this.initPromise ??= this.doInitialize().catch((error: unknown) => {
+			this.initPromise = undefined;
+			throw error;
+		});
+		return this.initPromise;
+	}
+
+	private async doInitialize(): Promise<void> {
+		if (!this.config.allowRlsBypass) {
+			await assertRlsEnforced(this.pool);
+		}
+		await runMigrations(this.pool, this.config.schema);
+		if (this.config.enforceUserScope) {
+			await ensureUserScopePolicy(this.pool, this.config.schema).catch(
+				(error: unknown) => {
+					throw wrapDatabaseError(error);
+				},
+			);
+		}
+		if (this.config.embeddingProvider) {
+			await this.checkStoreSetting(
+				"embedding_dimensions",
+				this.config.embeddingProvider.dimensions,
+				"embedding provider dimension",
+			);
+			await this.checkStoreSetting(
+				"embedding_model",
+				this.config.embeddingProvider.model,
+				"embedding provider model",
+			);
+		}
+	}
+
+	private async checkStoreSetting(
+		key: "embedding_dimensions" | "embedding_model",
+		expected: number | string,
+		label: string,
+	): Promise<void> {
+		const result = await this.pool
+			.query<{ value: unknown }>(
+				`SELECT value FROM ${quoteIdent(this.config.schema)}.settings WHERE key = $1`,
+				[key],
+			)
+			.catch((error: unknown) => {
+				throw wrapDatabaseError(error);
+			});
+		const stored = result.rows[0]?.value;
+		if (stored !== undefined && primitiveSetting(stored) !== String(expected)) {
+			throw new MnemonConfigurationError(
+				`${label} ${String(expected)} does not match store ${primitiveSetting(stored)}`,
+			);
+		}
+	}
+
+	async withAuthorization<T>(
+		authorization: MnemonAuthorization,
+		fn: (mnemon: Mnemon) => Promise<T>,
+	): Promise<T> {
+		const auth = validateAuthorization(authorization);
+		if (this.closed) {
+			throw new MnemonConfigurationError("mnemon is closed");
+		}
+		await this.initialize();
+		// Caller errors must surface unchanged; withTransaction only masks
+		// driver errors. Box them through the rollback and unbox after.
+		const boxed = { error: undefined as unknown, failed: false };
+		try {
+			return await withTransaction(this.pool, async (client) => {
+			await this.registerVectorTypes(client);
+			// is_local = true: settings vanish at COMMIT/ROLLBACK, so a pooled
+			// connection never carries one caller's identity into the next.
+			await client.query(
+				"SELECT set_config('mnemon.tenant_id', $1, true), set_config('mnemon.user_id', $2, true)",
+				[auth.tenantId, auth.userId ?? ""],
+			);
+				try {
+					return await fn(
+						new MnemonService(
+							this.config,
+							new PostgresMnemonStore(client, this.config.schema, auth.namespace),
+							auth.namespace,
+						),
+					);
+				} catch (error) {
+					if (!(error instanceof MnemonError)) {
+						boxed.error = error;
+						boxed.failed = true;
+					}
+					throw error;
+				}
+			});
+		} catch (error) {
+			throw boxed.failed ? boxed.error : error;
+		}
+	}
+
+	scope(authorization: MnemonAuthorization): Mnemon {
+		const view = {} as Record<string, unknown>;
+		for (const method of SCOPED_METHODS) {
+			view[method] = (...args: unknown[]) =>
+				this.withAuthorization(authorization, (m) =>
+					(m[method] as (...a: unknown[]) => Promise<unknown>)(...args),
+				);
+		}
+		return view as unknown as Mnemon;
+	}
+
+	private async registerVectorTypes(client: PoolClient): Promise<void> {
+		if (this.typedClients.has(client)) {
+			return;
+		}
+		await pgvector.registerTypes(client);
+		this.typedClients.add(client);
+	}
+
+	async close(): Promise<void> {
+		this.closed = true;
+		try {
+			await this.initPromise;
+		} catch {}
+		if (this.ownsPool) {
+			await this.pool.end();
+		}
+	}
+}
+
+class MnemonService implements Mnemon {
+	constructor(
+		private readonly config: ResolvedConfig,
+		private readonly store: MnemonStore,
+		private readonly namespace: string,
+	) {}
+
+	async once<T>(
+		key: string,
+		fn: (mnemon: Mnemon) => Promise<T>,
+	): Promise<OnceResult<T>> {
+		if (typeof key !== "string" || key.length === 0 || key.length > 512) {
+			throw new MnemonConfigurationError(
+				"once key must be a string of 1-512 characters",
+			);
+		}
+		await this.store.lockOperation(key);
+		const stored = await this.store.getOperation(key);
+		if (stored) {
+			return { value: stored.value as T, replayed: true };
+		}
+		const value = await fn(this);
+		// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- fn may resolve to undefined
+		await this.store.putOperation(key, value ?? null);
+		return { value, replayed: false };
+	}
+
+	async remember(input: RememberInput): Promise<RememberResult> {
+		const validated = validateRememberInput(input, this.config.defaults);
+		const now = this.config.clock.now();
+		const createdAt = validated.createdAt ?? now;
+		const normalized = normalizeContent(validated.content);
+		const hash = contentHash(normalized);
+
+		const exact = await this.store.findExactDuplicate(hash);
+		if (exact) {
+			return this.skipDuplicate(exact, now);
+		}
+
+		let embedding: number[] | undefined;
+		if (this.config.embeddingProvider) {
+			embedding = await this.embed(validated.content, "document");
+		}
+
+		const near = await this.findNearDuplicates(validated.content, embedding);
+		const diff = classifyDiff(validated.content, near);
+		if (validated.deduplicate) {
+			const classified = classifySafeDuplicate(validated.content, near);
+			if (classified) {
+				const existing = await this.store.getActiveInsight(classified.id);
+				if (existing) {
+					return this.skipDuplicate(existing, now, classified.id, diff);
+				}
+			}
+		}
+
+		const known = new Set(await this.store.listKnownEntities());
+		const extracted = extractEntitiesIndexed(validated.content, known);
+		const entities = mergeEntities(validated.entities, extracted);
+		const searchTokens = sortedSearchTokens(
+			validated.content,
+			validated.tags,
+			entities,
+		);
+		const id = randomUUID();
+		const generated = await this.generateEdges(
+			{
+				id,
+				content: validated.content,
+				source: validated.source,
+				createdAt,
+				entities,
+				embedding,
+			},
+			now,
+		);
+
+		try {
+			const { insight, edges } = await this.store.withTransaction(
+				async (tx) => {
+					if (embedding && this.config.embeddingProvider) {
+						await tx.establishEmbeddingSettings(
+							this.config.embeddingProvider.dimensions,
+							this.config.embeddingProvider.model,
+							now,
+						);
+					}
+
+					const inserted = await tx.insertInsight({
+						id,
+						content: validated.content,
+						normalizedContent: normalized,
+						contentHash: hash,
+						searchTokens,
+						category: validated.category,
+						importance: validated.importance,
+						tags: validated.tags,
+						entities,
+						source: validated.source,
+						metadata: {},
+						managed: false,
+						createdAt,
+						updatedAt: now,
+						embedding: embedding ?? null,
+						effectiveImportance: 0.5,
+					});
+
+					const persisted = await tx.upsertEdges(
+						generated.map((e) => ({ ...e, createdAt: now })),
+					);
+					const ei = effectiveImportance({
+						importance: inserted.importance,
+						accessCount: 0,
+						daysSinceAccess: 0,
+						edgeCount: persisted.length,
+					});
+					await tx.setEffectiveImportance(inserted.id, ei);
+					inserted.effectiveImportance = ei;
+
+					await tx.appendOp(
+						"remember",
+						inserted.id,
+						{
+							edge_counts: countEdgesByType(generated),
+							embedding_model: this.config.embeddingProvider?.model ?? null,
+						},
+						now,
+					);
+					return { insight: inserted, edges: persisted };
+				},
+			);
+
+			const semanticCandidates = await this.semanticCandidates(insight);
+			return {
+				action: "added",
+				insight: toPublicInsight(insight),
+				suggestion: diff.suggestion,
+				diff: diff.matches,
+				semanticCandidates,
+				edgeCounts: countEdgesByType(edges),
+			};
+		} catch (error) {
+			if (isUniqueViolation(error)) {
+				const winner = await this.store.findExactDuplicate(hash);
+				if (winner) {
+					return this.skipDuplicate(winner, now);
+				}
+			}
+			throw error;
+		}
+	}
+
+	async upsert(input: ManagedInsightInput): Promise<Insight> {
+		const id = validateUuid(input.id, "id");
+		const validated = validateRememberInput(input, this.config.defaults);
+		const metadata = validateMetadata(input.metadata);
+		const now = this.config.clock.now();
+		const createdAt = validated.createdAt ?? now;
+		const normalized = normalizeContent(validated.content);
+		const embedding = this.config.embeddingProvider
+			? await this.embed(validated.content, "document")
+			: undefined;
+		const known = new Set(await this.store.listKnownEntities());
+		const entities = mergeEntities(
+			validated.entities,
+			extractEntitiesIndexed(validated.content, known),
+		);
+		const generated = await this.generateEdges(
+			{
+				id,
+				content: validated.content,
+				source: validated.source,
+				createdAt,
+				entities,
+				embedding,
+			},
+			now,
+		);
+		const insight = await this.store.withTransaction(async (tx) => {
+			if (embedding && this.config.embeddingProvider) {
+				await tx.establishEmbeddingSettings(
+					this.config.embeddingProvider.dimensions,
+					this.config.embeddingProvider.model,
+					now,
+				);
+			}
+			const persisted = await tx.upsertManagedInsight({
+				id,
+				content: validated.content,
+				normalizedContent: normalized,
+				contentHash: contentHash(normalized),
+				searchTokens: sortedSearchTokens(
+					validated.content,
+					validated.tags,
+					entities,
+				),
+				category: validated.category,
+				importance: validated.importance,
+				tags: validated.tags,
+				entities,
+				source: validated.source,
+				metadata,
+				managed: true,
+				createdAt,
+				updatedAt: now,
+				embedding: embedding ?? null,
+				effectiveImportance: 0.5,
+			});
+			const edges = await tx.upsertEdges(
+				generated.map((edge) => ({ ...edge, createdAt: now })),
+			);
+			const importance = effectiveImportance({
+				importance: persisted.importance,
+				accessCount: persisted.accessCount,
+				daysSinceAccess: 0,
+				edgeCount: edges.length,
+			});
+			await tx.setEffectiveImportance(id, importance);
+			persisted.effectiveImportance = importance;
+			await tx.appendOp(
+				"upsert",
+				id,
+				{ edge_counts: countEdgesByType(edges) },
+				now,
+			);
+			return persisted;
+		});
+		return toPublicInsight(insight);
+	}
+
+	async recall(input: RecallInput): Promise<RecallResult> {
+		const validated = validateRecallInput(
+			input,
+			this.config.defaults.recallLimit,
+		);
+		const now = this.config.clock.now();
+
+		let queryVector: number[] | undefined;
+		if (this.config.embeddingProvider) {
+			queryVector = await this.embed(validated.query, "query");
+		}
+
+		const intent = validated.intent ?? detectIntent(validated.query);
+		const intentSource = validated.intent ? "override" : "auto";
+		const queryTokens = sortedTokens(validated.query);
+		const known = new Set(await this.store.listKnownEntities());
+		const queryEntities = extractEntitiesIndexed(validated.query, known);
+
+		const anchors = await this.store.selectRecallAnchors({
+			queryTokens,
+			queryVector,
+			limitPerSignal: ANCHOR_TOP_K,
+			source: validated.source,
+		});
+
+		const walked = await this.store.walkRecallGraph({
+			anchors,
+			intent,
+			queryVector,
+			maxCandidates: this.config.limits.maxRecallCandidates,
+		});
+		const graphRaw = new Map(walked.map((row) => [row.id, row.score]));
+		const viaById = new Map(walked.map((row) => [row.id, row.via]));
+		const candidateIds = walked.map((row) => row.id);
+		const scored = await this.store.loadScoredInsights({
+			ids: candidateIds,
+			queryTokens,
+			queryEntities,
+			queryVector,
+		});
+		const scoredById = new Map(scored.map((row) => [row.insight.id, row]));
+		const graphById = normalizeEliteGraph(
+			scored.map((row) => ({
+				id: row.insight.id,
+				keyword: row.signals.keyword,
+				similarity: row.signals.similarity,
+				graphRaw: graphRaw.get(row.insight.id) ?? 0,
+			})),
+			queryVector !== undefined,
+		);
+
+		let hits: RecallHit[] = [];
+		for (const id of candidateIds) {
+			const row = scoredById.get(id);
+			if (!row) {
+				continue;
+			}
+			const insight = row.insight;
+			const signals = row.signals;
+			const graph = graphById.get(id) ?? 0;
+			const score = composeFinalScore({
+				keyword: signals.keyword,
+				entity: signals.entity,
+				similarity: signals.similarity,
+				graph,
+				hasQueryEmbedding: queryVector !== undefined,
+			});
+			const via = viaById.get(id) ?? "keyword";
+			hits.push({
+				insight: toPublicInsight(insight),
+				score,
+				intent,
+				matchedVia: via as RecallHit["matchedVia"],
+				signals: {
+					keyword: signals.keyword,
+					entity: signals.entity,
+					similarity: signals.similarity,
+					graph,
+				},
+			});
+		}
+
+		hits.sort((a, b) =>
+			compareRecallHits(
+				{ score: a.score, importance: a.insight.importance },
+				{ score: b.score, importance: b.insight.importance },
+			),
+		);
+
+		if (intent === "WHY") {
+			const causal = (await this.store.getEdgesForNodeIds(candidateIds)).filter(
+				(e) => e.edgeType === "causal",
+			);
+			const ranked = hits.slice(0, validated.limit);
+			hits = causalTopologicalOrder(
+				ranked.map((h) => ({ ...h, id: h.insight.id })),
+				causal,
+			);
+		} else {
+			hits = hits.slice(0, validated.limit);
+		}
+
+		if (validated.brief) {
+			hits = hits.map((hit) => {
+				const excerpt = makeBriefExcerpt(
+					hit.insight.content,
+					validated.excerptChars,
+				);
+				return {
+					...hit,
+					excerpt,
+					insight: { ...hit.insight, content: excerpt },
+				};
+			});
+		}
+
+		const returnedIds = hits.map((h) => h.insight.id);
+		await this.store.withTransaction(async (tx) => {
+			await tx.incrementAccess(returnedIds, now);
+			await tx.appendOp(
+				"recall",
+				null,
+				{
+					query_hash: createHash("sha256")
+						.update(validated.query, "utf8")
+						.digest("hex"),
+					hit_count: returnedIds.length,
+					intent,
+					algorithm_version: ALGORITHM_VERSION,
+				},
+				now,
+			);
+		});
+
+		const result: RecallResult = {
+			results: hits,
+			meta: {
+				intent,
+				intentSource,
+				anchorCount: anchors.length,
+				traversed: walked.length,
+				algorithmVersion: ALGORITHM_VERSION,
+			},
+		};
+		if (hits.length === 0 || hits.length < validated.limit / 2) {
+			result.meta.hint = "sparse_results";
+		}
+		return result;
+	}
+
+	async link(input: LinkInput): Promise<Edge> {
+		const validated = validateLinkInput(input);
+		const now = this.config.clock.now();
+		const edge = await this.store.withTransaction((tx) =>
+			tx.linkAndLog(
+				{
+					sourceId: validated.sourceId,
+					targetId: validated.targetId,
+					edgeType: validated.edgeType,
+					weight: validated.weight,
+					metadata: validated.metadata,
+					createdAt: now,
+				},
+				now,
+			),
+		);
+		return toPublicEdge(edge);
+	}
+
+	async related(
+		id: string,
+		options?: { maxDepth?: number; limit?: number; edgeType?: EdgeType },
+	): Promise<RelatedInsight[]> {
+		validateUuid(id, "id");
+		const start = await this.store.getActiveInsight(id);
+		if (!start) {
+			throw new MnemonNotFoundError(`insight ${id} not found`, id);
+		}
+		const maxDepth = Math.min(
+			Math.max(options?.maxDepth ?? DEFAULT_RELATED_DEPTH, 1),
+			MAX_RELATED_DEPTH,
+		);
+		const limit = Math.min(
+			Math.max(options?.limit ?? DEFAULT_RELATED_LIMIT, 1),
+			MAX_RELATED_LIMIT,
+		);
+		const walked = await this.store.walkRelated({
+			startId: id,
+			maxDepth,
+			limit,
+			edgeType: options?.edgeType,
+		});
+		return flatMapJoined(
+			walked,
+			await this.store.loadInsightsByIds(walked.map((o) => o.id)),
+			(o, insight) => {
+				const via = o.viaEdgeType;
+				const row: RelatedInsight = {
+					...toPublicInsight(insight),
+					depth: o.depth,
+				};
+				if (via && (EDGE_TYPES as readonly string[]).includes(via)) {
+					row.viaEdgeType = via as RelatedInsight["viaEdgeType"];
+				}
+				return row;
+			},
+		);
+	}
+
+	async forget(id: string): Promise<ForgetResult> {
+		validateUuid(id, "id");
+		const now = this.config.clock.now();
+		const forgotten = await this.store.withTransaction((tx) =>
+			tx.forgetAndLog(id, now),
+		);
+		return { forgotten, id };
+	}
+
+	async get(id: string): Promise<Insight | null> {
+		validateUuid(id, "id");
+		const record = await this.store.getActiveInsight(id);
+		return record ? toPublicInsight(record) : null;
+	}
+
+	async list(input?: ListInput): Promise<Insight[]> {
+		const validated = validateListInput(input);
+		const rows = await this.store.listInsights(validated);
+		return rows.map(toPublicInsight);
+	}
+
+	async search(input: SearchInput): Promise<SearchResult> {
+		const validated = validateSearchInput(input);
+		const queryTokens = sortedTokens(validated.query);
+		const hits = await this.store.searchInsights({
+			query: validated.query,
+			queryTokens,
+			limit: validated.limit,
+			source: validated.source,
+		});
+		return {
+			results: flatMapJoined(
+				hits,
+				await this.store.loadInsightsByIds(hits.map((h) => h.id)),
+				(hit, insight) => {
+					const via =
+						hit.keyword > 0 && hit.fts > 0
+							? "hybrid"
+							: hit.fts > hit.keyword
+								? "fts"
+								: "keyword";
+					return {
+						insight: toPublicInsight(insight),
+						score:
+							SEARCH_KEYWORD_WEIGHT * hit.keyword + SEARCH_FTS_WEIGHT * hit.fts,
+						matchedVia: via,
+						signals: { keyword: hit.keyword, fts: hit.fts },
+					};
+				},
+			),
+		};
+	}
+
+	async log(input?: LogInput): Promise<OpLogEntry[]> {
+		const validated = validateLogInput(input);
+		const rows = await this.store.listOps(validated);
+		return rows.map((row) => {
+			const entry: OpLogEntry = {
+				id: row.id,
+				operation: row.operation,
+				detail: row.detail,
+				createdAt: row.createdAt.toISOString(),
+			};
+			if (row.insightId) {
+				entry.insightId = row.insightId;
+			}
+			return entry;
+		});
+	}
+
+	async status(): Promise<MnemonStatus> {
+		const counts = await this.store.counts();
+		const model = await this.store.getSetting("embedding_model");
+		const dimensions = await this.store.getSetting("embedding_dimensions");
+		const status: MnemonStatus = {
+			namespace: this.namespace,
+			schema: this.config.schema,
+			algorithmVersion: ALGORITHM_VERSION,
+			insights: counts.insights,
+			embeddings: counts.embeddings,
+			edges: counts.edges,
+		};
+		if (typeof model === "string" && model.length > 0) {
+			status.embeddingModel = model;
+		}
+		if (typeof dimensions === "number" && Number.isFinite(dimensions)) {
+			status.embeddingDimensions = dimensions;
+		}
+		return status;
+	}
+
+	private async embed(
+		text: string,
+		purpose: "document" | "query",
+	): Promise<number[]> {
+		const provider = this.config.embeddingProvider;
+		if (!provider) {
+			throw new MnemonConfigurationError(
+				"embedding provider is not configured",
+			);
+		}
+		try {
+			const vector = await provider.embed(text, purpose);
+			return validateEmbedding(vector, provider.dimensions);
+		} catch (error) {
+			if (error instanceof MnemonEmbeddingError) {
+				throw error;
+			}
+			throw new MnemonEmbeddingError("embedding provider failed", {
+				cause: error,
+			});
+		}
+	}
+
+	private async skipDuplicate(
+		existing: InsightRecord,
+		now: Date,
+		duplicateOf?: string,
+		diff = classifyDiff(existing.content, [
+			{ id: existing.id, content: existing.content, cosineSimilarity: 1 },
+		]),
+	): Promise<RememberResult> {
+		await this.store.withTransaction((tx) =>
+			tx.appendOp(
+				"remember_skipped",
+				existing.id,
+				{ duplicate_of: duplicateOf ?? existing.id },
+				now,
+			),
+		);
+		return {
+			action: "skipped",
+			insight: toPublicInsight(existing),
+			duplicateOf: duplicateOf ?? existing.id,
+			suggestion: "DUPLICATE",
+			diff: diff.matches,
+			semanticCandidates: [],
+			edgeCounts: emptyEdgeCounts(),
+		};
+	}
+
+	private async findNearDuplicates(
+		content: string,
+		embedding: number[] | undefined,
+	): Promise<
+		{
+			id: string;
+			content: string;
+			tokenSimilarity: number;
+			cosineSimilarity: number;
+		}[]
+	> {
+		const tokens = sortedTokens(content);
+		const keywordHits = await this.store.findKeywordCandidates(
+			tokens,
+			DEDUP_CANDIDATE_LIMIT,
+		);
+		const vectorHits = embedding
+			? await this.store.nearestEmbeddings(embedding, {
+					limit: DEDUP_CANDIDATE_LIMIT,
+				})
+			: [];
+		const ids = [
+			...new Set([
+				...keywordHits.map((h) => h.id),
+				...vectorHits.map((h) => h.id),
+			]),
+		];
+		return (await this.store.loadInsightsByIds(ids, { embedding: true }))
+			.filter((insight) => !insight.managed)
+			.map((ins) => ({
+				id: ins.id,
+				content: ins.content,
+				...scoreDuplicateCandidate(
+					content,
+					ins.content,
+					embedding,
+					ins.embedding ?? undefined,
+				),
+			}));
+	}
+
+	private async generateEdges(
+		insight: {
+			id: string;
+			content: string;
+			source: string;
+			createdAt: Date;
+			entities: readonly string[];
+			embedding?: number[] | null;
+		},
+		now: Date,
+	) {
+		const since = new Date(now.getTime() - TEMPORAL_WINDOW_HOURS * 3_600_000);
+		const context = await this.store.loadEdgeContext({
+			excludeId: insight.id,
+			source: insight.source,
+			since,
+			entities: insight.entities,
+		});
+		const temporal = buildTemporalEdges({
+			newId: insight.id,
+			newCreatedAt: insight.createdAt,
+			latestSameSource: context.latestSameSource,
+			recentWithin24h: context.recentWithin24h,
+		});
+		const entity = buildEntityEdges({
+			newId: insight.id,
+			pairs: context.entityPairs,
+		});
+		const causal = buildCausalEdges({
+			newId: insight.id,
+			newContent: insight.content,
+			previous: context.causalPrevious,
+		});
+
+		let semantic: ReturnType<typeof buildSemanticEdges> = [];
+		if (insight.embedding) {
+			const neighbors = await this.store.nearestEmbeddings(insight.embedding, {
+				excludeId: insight.id,
+				limit: MAX_SEMANTIC_EDGES,
+			});
+			semantic = buildSemanticEdges({
+				newId: insight.id,
+				neighbors: neighbors.map((n) => ({
+					id: n.id,
+					cosine: n.cosineSimilarity,
+				})),
+			});
+		}
+
+		return [...temporal, ...entity, ...causal, ...semantic];
+	}
+
+	private async semanticCandidates(
+		insight: InsightRecord,
+	): Promise<SimilarMemory[]> {
+		if (!insight.embedding) {
+			return [];
+		}
+		const hits = await this.store.nearestEmbeddings(insight.embedding, {
+			excludeId: insight.id,
+			limit: 5,
+			minCosine: SEMANTIC_CANDIDATE_MIN_COSINE,
+		});
+		return flatMapJoined(
+			hits,
+			await this.store.loadInsightsByIds(
+				hits.map((h) => h.id),
+				{ embedding: true },
+			),
+			(h, ins) => {
+				const scored = scoreDuplicateCandidate(
+					insight.content,
+					ins.content,
+					insight.embedding ?? undefined,
+					ins.embedding ?? undefined,
+				);
+				return {
+					id: ins.id,
+					content: ins.content,
+					category: ins.category,
+					tokenSimilarity: scored.tokenSimilarity,
+					cosineSimilarity: h.cosineSimilarity,
+				} satisfies SimilarMemory;
+			},
+		);
+	}
+}
+
+function indexById<T extends { id: string }>(
+	rows: readonly T[],
+): Map<string, T> {
+	return new Map(rows.map((row) => [row.id, row]));
+}
+
+function flatMapJoined<T extends { id: string }, R>(
+	hits: readonly T[],
+	rows: readonly InsightRecord[],
+	fn: (hit: T, insight: InsightRecord) => R,
+): R[] {
+	const byId = indexById(rows);
+	const out: R[] = [];
+	for (const hit of hits) {
+		const insight = byId.get(hit.id);
+		if (insight) {
+			out.push(fn(hit, insight));
+		}
+	}
+	return out;
+}
