@@ -46,7 +46,8 @@ ${FLAGS.map((flag) => {
 	.join(" ")}
 - importance: ${IMPORTANCE_QUESTION.instructions} ${IMPORTANCE_QUESTION.criteria
 	.map((text, i) => `${i + 1}: ${text}`)
-	.join(" ")}`;
+	.join(" ")}
+- supersedes: Indexes into \`relatedMemories\` of entries \`candidate.fact\` makes no longer true, for example by changing a value, reversing a decision, or naming a replacement. Leave out entries it agrees with, only adds detail to, or that are about a different subject. Empty when none.`;
 
 const RESPONSE_FORMAT = {
 	type: "json_schema",
@@ -59,8 +60,9 @@ const RESPONSE_FORMAT = {
 				...Object.fromEntries(FLAGS.map((f) => [f, { type: "boolean" }])),
 				category: { type: "string", enum: INSIGHT_CATEGORIES },
 				importance: { type: "integer", enum: [1, 2, 3, 4, 5] },
+				supersedes: { type: "array", items: { type: "integer" } },
 			},
-			required: [...FLAGS, "category", "importance"],
+			required: [...FLAGS, "category", "importance", "supersedes"],
 			additionalProperties: false,
 		},
 	},
@@ -116,8 +118,15 @@ export function llmGate(options: LlmGateOptions = {}): MemoryGate {
 			return { accept: false, reasons: ["invalid-evaluation"] };
 		}
 		const decision = decide(answers as Record<GateFlag, boolean>);
-		return decision.accept
-			? { ...decision, ...classification(answers.category, answers.importance) }
-			: decision;
+		if (!decision.accept) return decision;
+		const indexes = Array.isArray(answers.supersedes) ? (answers.supersedes as unknown[]) : [];
+		const supersedes = input.relatedMemories
+			.filter((_, i) => indexes.includes(i))
+			.map((r) => r.id);
+		return {
+			...decision,
+			...classification(answers.category, answers.importance),
+			...(supersedes.length ? { supersedes } : {}),
+		};
 	};
 }

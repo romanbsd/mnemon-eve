@@ -27,11 +27,11 @@ export const CAUSAL_RELATION_CRITERIA: Record<CausalRelation, string> = {
 	none: "Neither explains the other; they are unrelated or only share a topic.",
 };
 
-type ChoiceQuestion = {
+interface ChoiceQuestion {
 	type: "choice";
 	instructions: string;
 	criteria: Record<string, string>;
-};
+}
 
 /** Subset of `evaluate` from `eve/ai` the judges need; inject a fake in tests. */
 export type JudgeEvaluator = (options: {

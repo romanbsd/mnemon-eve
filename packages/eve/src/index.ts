@@ -13,6 +13,7 @@ export {
 	type MemoryGate,
 	type MemoryGateDecision,
 	type MemoryGateInput,
+	supersedeQuestion,
 } from "./gate.js";
 export {
 	CAUSAL_RELATION_CRITERIA,

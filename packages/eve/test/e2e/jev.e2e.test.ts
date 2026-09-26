@@ -66,6 +66,33 @@ describe.skipIf(!available)("jevGate end to end", { timeout: 60_000 }, () => {
 		});
 	});
 
+	it("replaces a memory the new fact contradicts", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const org = slot(client, "organization", ["tenant-a"]);
+			const old = await org.propose(
+				"Refunds over 500 euros must be approved by the head of customer support",
+			);
+			expect(old.status).toBe("stored");
+			const unrelated = await org.propose(
+				"Refunds are paid back to the original payment method within 10 business days",
+			);
+			expect(unrelated.status).toBe("stored");
+
+			const next = await org.propose(
+				"Since the March reorganisation, refunds over 500 euros must be approved by the CFO instead of the head of customer support",
+			);
+			console.log("contradiction:", next);
+			expect(next).toMatchObject({ status: "stored", superseded: [old.id] });
+
+			const recalled = (await org.turn("who approves large refunds?")).messages
+				.map((m) => m.content)
+				.join();
+			expect(recalled).toContain("CFO");
+			expect(recalled).not.toContain("must be approved by the head of customer support");
+			expect(recalled).toContain("10 business days");
+		});
+	});
+
 	it("rejects transient task state", async () => {
 		await withMnemon({}, async (_m, { client }) => {
 			const org = slot(client, "organization", ["tenant-a"]);

@@ -25,6 +25,8 @@ export interface ProposalResult {
 	reasons: string[];
 	/** Memory id when stored or already present. */
 	id?: string;
+	/** Ids of related memories the stored fact replaced; they are forgotten. */
+	superseded?: string[];
 }
 
 /** Metadata only: never memory bodies, facts, or auth attributes. */
@@ -47,6 +49,8 @@ export type MnemonEveEvent =
 			partition: string;
 			status: ProposalStatus;
 			reasons: string[];
+			/** Related memories forgotten because the stored fact replaced them. */
+			superseded: number;
 			gateMs?: number;
 			writeMs?: number;
 			latencyMs: number;
@@ -201,14 +205,28 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 										source: `eve:${slot}`,
 										deduplicate: true,
 									});
+									if (saved.action !== "added") {
+										writeMs = performance.now() - t;
+										return {
+											status: "duplicate",
+											reasons: [],
+											id: saved.duplicateOf ?? saved.insight.id,
+										};
+									}
+									// Only ids the gate was shown: a custom gate cannot reach
+									// other memories through this.
+									const shown = new Set(related.results.map((h) => h.insight.id));
+									const superseded = [...new Set(decision.supersedes ?? [])].filter(
+										(id) => shown.has(id) && id !== saved.insight.id,
+									);
+									for (const id of superseded) await m.forget(id);
 									writeMs = performance.now() - t;
-									return saved.action === "added"
-										? { status: "stored", reasons: [], id: saved.insight.id }
-										: {
-												status: "duplicate",
-												reasons: [],
-												id: saved.duplicateOf ?? saved.insight.id,
-											};
+									return {
+										status: "stored",
+										reasons: [],
+										id: saved.insight.id,
+										...(superseded.length ? { superseded } : {}),
+									};
 								}),
 							);
 						}
@@ -220,6 +238,7 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 							partition: scope.partition,
 							status: outcome.value.status,
 							reasons: outcome.value.reasons,
+							superseded: outcome.value.superseded?.length ?? 0,
 							gateMs,
 							writeMs,
 							latencyMs: performance.now() - started,

@@ -25,6 +25,9 @@ const fakeEvaluate: MemoryEvaluator = async ({ state }) => {
 			duplicate: p(related.some((r) => r.content === fact)),
 			appropriateAudience: p(!fact.includes("[wrong-audience]")),
 			sensitive: p(fact.includes("[secret]")),
+			...Object.fromEntries(
+				related.map((_, i) => [`supersedes_${i}`, p(fact.includes("[replaces]"))]),
+			),
 		},
 	};
 };
@@ -148,6 +151,28 @@ describe.skipIf(!available)("mnemonMemory", () => {
 			const replay = await org.turn("support hours", "op-1");
 			expect(replay).toEqual(before);
 			expect(events.filter((e) => e.replayed)).toHaveLength(2);
+		});
+	});
+
+	it("forgets related memories the stored fact supersedes", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const events: MnemonEveEvent[] = [];
+			const org = slot(client, "organization", ["tenant-a"], events);
+			const other = slot(client, "organization", ["tenant-b"]);
+			const old = await org.propose("Refunds are approved by the support lead");
+			const kept = await other.propose("Refunds are approved by the support lead");
+
+			const next = await org.propose("[replaces] Refunds are approved by the CFO");
+			expect(next).toMatchObject({ status: "stored", superseded: [old.id] });
+			expect(events.at(-1)).toMatchObject({ type: "proposal", superseded: 1 });
+
+			const recalled = (await org.turn("who approves refunds?")).messages.map((m) => m.content);
+			expect(recalled.join()).toContain("CFO");
+			expect(recalled.join()).not.toContain("support lead");
+			expect((await other.turn("who approves refunds?")).messages[0]?.content).toContain(
+				"support lead",
+			);
+			expect(kept.status).toBe("stored");
 		});
 	});
 

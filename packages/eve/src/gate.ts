@@ -31,6 +31,11 @@ export interface MemoryGateDecision {
 	category?: InsightCategory;
 	/** Stored importance; omitted falls back to the Mnemon default. */
 	importance?: 1 | 2 | 3 | 4 | 5;
+	/**
+	 * Ids from `relatedMemories` the fact makes no longer true. The provider
+	 * forgets them once the fact is stored; other ids are ignored.
+	 */
+	supersedes?: string[];
 }
 
 /**
@@ -104,6 +109,17 @@ export const IMPORTANCE_QUESTION = {
 	],
 };
 
+/** Whether the candidate replaces related memory `i`; asked once per related memory. */
+export function supersedeQuestion(i: number) {
+	return {
+		instructions: `Does \`candidate.fact\` make \`relatedMemories[${i}].content\` no longer true, for example by changing a value, reversing a decision, or naming a replacement?`,
+		criteria: {
+			false:
+				"The candidate agrees with it, only adds detail, or is about a different subject.",
+		},
+	};
+}
+
 /** Keeps only a valid category and importance; anything else is omitted. */
 export function classification(
 	category: unknown,
@@ -145,22 +161,31 @@ interface BooleanQuestion {
 	criteria?: { true?: string; false?: string };
 }
 
-type JevQuestions = Record<GateFlag, BooleanQuestion> & {
-	category: { type: "choice" } & typeof CATEGORY_QUESTION;
-	importance: { type: "score" } & typeof IMPORTANCE_QUESTION;
-};
+type JevQuestion =
+	| BooleanQuestion
+	| ({ type: "choice" } & typeof CATEGORY_QUESTION)
+	| ({ type: "score" } & typeof IMPORTANCE_QUESTION);
 
-/** Subset of `evaluate` from `eve/ai` that `jevGate` needs; inject a fake in tests. */
+/**
+ * Subset of `evaluate` from `eve/ai` that `jevGate` needs; inject a fake in
+ * tests. Questions are the gate flags, `category`, `importance`, and
+ * `supersedes_<i>` per related memory.
+ */
 export type MemoryEvaluator = (options: {
 	state: Record<string, unknown>;
-	questions: JevQuestions;
+	questions: Record<string, JevQuestion>;
 	abortSignal?: AbortSignal;
 }) => Promise<{
-	answers: Record<GateFlag, { probability: number }> & {
-		category?: { choice: string };
-		/** Fractional level index, 0 through 4. */
-		importance?: { score: number };
-	};
+	answers: Record<
+		string,
+		| {
+				probability?: number;
+				choice?: string;
+				/** Fractional level index, 0 through 4, for `importance`. */
+				score?: number;
+		  }
+		| undefined
+	>;
 }>;
 
 export interface JevGateOptions {
@@ -168,16 +193,18 @@ export interface JevGateOptions {
 	model?: Parameters<typeof evaluate>[0]["model"];
 	/** Probability at which a flag counts as true. Default 0.5. */
 	threshold?: number;
+	/** Probability at which a related memory counts as superseded. Default 0.8: forgetting is destructive. */
+	supersedeThreshold?: number;
 	evaluate?: MemoryEvaluator;
 }
 
 const FLAGS = Object.keys(GATE_QUESTIONS) as GateFlag[];
 
 // Classification rides in the same request, so it adds no round trip.
-const JEV_QUESTIONS: JevQuestions = {
-	...(Object.fromEntries(
+const JEV_QUESTIONS: Record<string, JevQuestion> = {
+	...Object.fromEntries(
 		FLAGS.map((k) => [k, { type: "boolean", ...GATE_QUESTIONS[k] }]),
-	) as Record<GateFlag, BooleanQuestion>),
+	),
 	category: { type: "choice", ...CATEGORY_QUESTION },
 	importance: { type: "score", ...IMPORTANCE_QUESTION },
 };
@@ -185,6 +212,7 @@ const JEV_QUESTIONS: JevQuestions = {
 /** Gate backed by `evaluate` from `eve/ai` (TypeSafe Jev by default). */
 export function jevGate(options: JevGateOptions = {}): MemoryGate {
 	const threshold = options.threshold ?? 0.5;
+	const supersedeThreshold = options.supersedeThreshold ?? 0.8;
 	const evaluator: MemoryEvaluator =
 		options.evaluate ??
 		((input) =>
@@ -192,14 +220,21 @@ export function jevGate(options: JevGateOptions = {}): MemoryGate {
 	return async (input) => {
 		const { answers } = await evaluator({
 			state: gateState(input),
-			questions: JEV_QUESTIONS,
+			questions: {
+				...JEV_QUESTIONS,
+				...Object.fromEntries(
+					input.relatedMemories.map((_, i) => [
+						`supersedes_${i}`,
+						{ type: "boolean", ...supersedeQuestion(i) },
+					]),
+				),
+			},
 			abortSignal: input.abortSignal,
 		});
-		// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- model output may omit answers
 		if (!FLAGS.every((k) => Number.isFinite(answers[k]?.probability))) {
 			return { accept: false, reasons: ["invalid-evaluation"] };
 		}
-		const flag = (k: GateFlag) => answers[k].probability >= threshold;
+		const flag = (k: GateFlag) => (answers[k]?.probability ?? 0) >= threshold;
 		const decision = decide({
 			durable: flag("durable"),
 			transient: flag("transient"),
@@ -207,15 +242,18 @@ export function jevGate(options: JevGateOptions = {}): MemoryGate {
 			appropriateAudience: flag("appropriateAudience"),
 			sensitive: flag("sensitive"),
 		});
+		if (!decision.accept) return decision;
 		const score = answers.importance?.score;
-		return decision.accept
-			? {
-					...decision,
-					...classification(
-						answers.category?.choice,
-						typeof score === "number" ? score + 1 : undefined,
-					),
-				}
-			: decision;
+		const supersedes = input.relatedMemories
+			.filter((_, i) => (answers[`supersedes_${i}`]?.probability ?? 0) >= supersedeThreshold)
+			.map((r) => r.id);
+		return {
+			...decision,
+			...classification(
+				answers.category?.choice,
+				typeof score === "number" ? score + 1 : undefined,
+			),
+			...(supersedes.length ? { supersedes } : {}),
+		};
 	};
 }

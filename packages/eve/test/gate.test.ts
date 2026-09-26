@@ -41,6 +41,7 @@ describe("llmGate", () => {
 			...Object.keys(flags),
 			"category",
 			"importance",
+			"supersedes",
 		]);
 		expect(JSON.parse(body.messages[1].content).candidate.fact).toBe(input.fact);
 	});
@@ -69,6 +70,22 @@ describe("llmGate", () => {
 		});
 		const bad = fakeFetch(JSON.stringify({ ...flags, category: "nope", importance: 9 }));
 		expect(await llmGate({ fetch: bad.fn })(input)).toEqual({ accept: true, reasons: [] });
+	});
+
+	it("maps superseded indexes to related ids and ignores out-of-range ones", async () => {
+		const related = {
+			...input,
+			relatedMemories: [
+				{ id: "a", content: "Invoices are approved by the CFO" },
+				{ id: "b", content: "Invoices are paid monthly" },
+			],
+		};
+		const ok = fakeFetch(JSON.stringify({ ...flags, supersedes: [0, 7] }));
+		expect(await llmGate({ fetch: ok.fn })(related)).toMatchObject({ supersedes: ["a"] });
+		const none = fakeFetch(JSON.stringify({ ...flags, supersedes: [] }));
+		expect(await llmGate({ fetch: none.fn })(related)).not.toHaveProperty("supersedes");
+		const rejected = fakeFetch(JSON.stringify({ ...flags, durable: false, supersedes: [0] }));
+		expect(await llmGate({ fetch: rejected.fn })(related)).not.toHaveProperty("supersedes");
 	});
 
 	it("rejects on failed checks and fails closed on bad output", async () => {
@@ -108,7 +125,7 @@ describe("jevGate", () => {
 		).toEqual({ accept: false, reasons: ["durable", "appropriateAudience"] });
 		const { sensitive: _, ...partial } = answers;
 		expect(
-			await jevGate({ evaluate: async () => ({ answers: partial as typeof answers }) })(input),
+			await jevGate({ evaluate: async () => ({ answers: partial }) })(input),
 		).toEqual({ accept: false, reasons: ["invalid-evaluation"] });
 	});
 
@@ -142,5 +159,44 @@ describe("jevGate", () => {
 			evaluate: async () => ({ answers: { ...answers, durable: p(0.1) } }),
 		});
 		expect(await rejected(input)).toEqual({ accept: false, reasons: ["durable"] });
+	});
+
+	it("asks one supersede question per related memory and applies the stricter threshold", async () => {
+		const p = (v: number) => ({ probability: v });
+		const related = {
+			...input,
+			relatedMemories: [
+				{ id: "a", content: "Invoices are approved by the CFO" },
+				{ id: "b", content: "Invoices are approved within two days" },
+				{ id: "c", content: "Invoices are paid monthly" },
+			],
+		};
+		let asked: string[] = [];
+		const answers = {
+			durable: p(0.9),
+			transient: p(0.1),
+			duplicate: p(0.1),
+			appropriateAudience: p(0.9),
+			sensitive: p(0.01),
+			supersedes_0: p(0.95),
+			supersedes_1: p(0.7),
+			supersedes_2: p(0.05),
+		};
+		const gate = jevGate({
+			evaluate: async ({ questions }) => {
+				asked = Object.keys(questions);
+				return { answers };
+			},
+		});
+		expect(await gate(related)).toEqual({ accept: true, reasons: [], supersedes: ["a"] });
+		expect(asked.filter((k) => k.startsWith("supersedes_"))).toHaveLength(3);
+		expect(
+			await jevGate({ supersedeThreshold: 0.6, evaluate: async () => ({ answers }) })(related),
+		).toMatchObject({ supersedes: ["a", "b"] });
+		expect(
+			await jevGate({
+				evaluate: async () => ({ answers: { ...answers, durable: p(0.1) } }),
+			})(related),
+		).toEqual({ accept: false, reasons: ["durable"] });
 	});
 });

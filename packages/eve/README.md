@@ -286,16 +286,19 @@ fields. The tool runs these steps:
 4. On acceptance, stores the fact with source `eve:<slot>`, the category and
    importance the gate assigned (Mnemon defaults when it assigns none), and
    near-duplicate detection.
+5. Forgets the related memories the gate says the fact supersedes (see
+   [Superseding](#superseding)).
 
 It returns:
 
 ```json
 { "status": "stored", "reasons": [], "id": "0b6f…" }
+{ "status": "stored", "reasons": [], "id": "0b6f…", "superseded": ["9a1c…"] }
 { "status": "duplicate", "reasons": [], "id": "0b6f…" }
 { "status": "rejected", "reasons": ["transient"] }
 ```
 
-Steps 2–4 run exactly once per tool `callId` + slot + fact. A replayed tool
+Steps 2–5 run exactly once per tool `callId` + slot + fact. A replayed tool
 call returns the same result without calling the gate or writing again.
 
 There is deliberately no automatic `turn.completed` capture: the model
@@ -325,6 +328,7 @@ type MemoryGate = (input: MemoryGateInput) => Promise<{
   reasons: string[];
   category?: InsightCategory;   // stored category; omitted uses the Mnemon default
   importance?: 1 | 2 | 3 | 4 | 5; // stored importance; omitted uses the Mnemon default
+  supersedes?: string[];          // relatedMemories ids the fact makes no longer true
 }>;
 
 interface MemoryGateInput {
@@ -356,6 +360,26 @@ picks one of Mnemon's categories and `IMPORTANCE_QUESTION` rates importance
 1 to 5, which drives recall ranking and retention. An invalid classification is
 dropped and the Mnemon default applies; it never rejects a fact.
 
+### Superseding
+
+When a fact changes a value or reverses a decision, the old memory would keep
+being recalled next to the new one. So both built-in gates also ask, for each
+related memory, whether the candidate makes it no longer true
+(`supersedeQuestion(i)`), and return those ids in `supersedes`:
+
+```text
+stored:     "Refunds over €500 are approved by the head of customer support"
+proposed:   "Refunds over €500 are now approved by the CFO"
+result:     { "status": "stored", "id": "…", "superseded": ["<old id>"] }
+```
+
+After storing, the provider forgets (soft-deletes) each superseded id in the
+same transaction. It only acts on ids the gate was shown in
+`relatedMemories`, so a custom gate cannot reach other memories this way.
+Nothing is forgotten when the fact is rejected or turns out to be a duplicate.
+Forgotten memories stay in the database with `deleted_at` set and appear in
+`log({ operation: "forget" })`.
+
 ### jevGate (default)
 
 Uses `evaluate` from `eve/ai`, which means TypeSafe Jev through Vercel AI
@@ -367,6 +391,7 @@ import { jevGate } from "@mnemon/eve";
 jevGate();                                  // typesafe-ai/jev, threshold 0.5
 jevGate({ threshold: 0.7 });                // stricter: a flag counts as true at p ≥ 0.7
 jevGate({ model: "typesafe-ai/jev" });      // any AI SDK evaluation model id or instance
+jevGate({ supersedeThreshold: 0.9 });       // p needed to forget a related memory (default 0.8)
 ```
 
 The same request also asks `CATEGORY_QUESTION` (a choice) and
@@ -376,11 +401,14 @@ A higher `threshold` means a flag needs more confidence to count as true. It
 makes `durable` and `appropriateAudience` harder to pass, but `transient`,
 `duplicate`, and `sensitive` easier to pass too. Tune it on your own data.
 
+`supersedeThreshold` is separate and stricter by default because forgetting is
+destructive. Raise it if accurate memories are being replaced.
+
 ### llmGate
 
 Calls any OpenAI-compatible `POST {baseURL}/chat/completions` with a strict
-JSON schema response: the five flags as booleans, plus `category` and
-`importance` (1–5).
+JSON schema response: the five flags as booleans, plus `category`,
+`importance` (1–5), and `supersedes` (indexes into `relatedMemories`).
 
 ```ts
 import { llmGate } from "@mnemon/eve";
@@ -515,7 +543,7 @@ mnemonMemory({
 | Event | Fields |
 | --- | --- |
 | `recall` | `slot`, `audience`, `operationId`, `partition`, `count`, `latencyMs`, `replayed` |
-| `proposal` | `slot`, `audience`, `callId`, `partition`, `status`, `reasons`, `gateMs?`, `writeMs?`, `latencyMs`, `replayed` |
+| `proposal` | `slot`, `audience`, `callId`, `partition`, `status`, `reasons`, `superseded` (count), `gateMs?`, `writeMs?`, `latencyMs`, `replayed` |
 
 Exceptions thrown inside `onEvent` are swallowed. Track proposal rate and
 acceptance rate. If useful facts are rarely proposed, strengthen the
