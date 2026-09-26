@@ -152,6 +152,8 @@ await client.withAuthorization(auth, async (tx) => {
 | `forget(id)` | Soft-delete. |
 | `log(input?)` | Operation history. |
 | `status()` | Counts and embedding settings. |
+| `retentionCandidates(input?)` | Low-value memories to review for `forget`. |
+| `keep(id)` | Exempt a memory from retention candidates. |
 | `once(key, fn)` | Run `fn` at most once per key. |
 
 #### remember
@@ -201,6 +203,7 @@ const { results, meta } = await memory.recall({
   limit: 5,          // ≤ 100
   intent: "WHY",     // optional override; auto-detected otherwise
   source: "crm-sync",
+  category: "decision", // only return memories of this category
   brief: true,       // return flattened excerpts in hit.excerpt
   excerptChars: 200,
 });
@@ -222,6 +225,32 @@ await memory.forget(id);                                     // { forgotten, id 
 await memory.log({ limit: 20, operation: "remember" });
 await memory.status(); // { namespace, insights, embeddings, edges, embeddingModel, ... }
 ```
+
+`source` narrows where recall starts; `category` filters what it returns, so a
+match can still lead to related memories of that category through the graph.
+
+#### Retention
+
+Memories decay: effective importance is importance, halved every 30 days since
+last access, boosted by access count and edges. `retentionCandidates` lists
+the weakest ones for review. It never deletes anything, and memories with
+importance 4+ or 3+ accesses are immune. Recall counts as an access.
+
+```ts
+const { total, candidates } = await memory.retentionCandidates({
+  threshold: 0.5, // effective importance below this is a candidate (default)
+  limit: 20,
+});
+for (const c of candidates) {
+  c.insight; c.effectiveImportance; c.daysSinceAccess; c.edgeCount;
+}
+
+await memory.forget(candidates[0].insight.id); // drop it
+await memory.keep(candidates[1].insight.id);   // or keep it: +3 accesses, fresh access time
+```
+
+A periodic job can forget candidates automatically; prefer a low threshold, or
+have a person or model review them first.
 
 ### Idempotent operations
 

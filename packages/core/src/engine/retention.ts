@@ -6,6 +6,11 @@ const BASE: Record<number, number> = {
 	1: 0.15,
 };
 
+/** High-importance or frequently accessed memories are never retention candidates. */
+export function isImmune(importance: number, accessCount: number): boolean {
+	return importance >= 4 || accessCount >= 3;
+}
+
 export function effectiveImportance(input: {
 	importance: number;
 	accessCount: number;

@@ -15,6 +15,10 @@ export const DEFAULT_RELATED_LIMIT = 20;
 export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = 100;
 export const DEFAULT_LIST_LIMIT = 20;
+export const DEFAULT_RETENTION_LIMIT = 20;
+export const DEFAULT_RETENTION_THRESHOLD = 0.5;
+/** Access count added by `keep`, enough to make a memory immune. */
+export const KEEP_ACCESS_BOOST = 3;
 // Operational consistency scans need a bounded whole-namespace view.
 export const MAX_LIST_LIMIT = 10_000;
 export const DEFAULT_LOG_LIMIT = 50;

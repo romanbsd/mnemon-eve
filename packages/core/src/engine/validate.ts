@@ -11,6 +11,8 @@ import {
 	DEFAULT_BRIEF_EXCERPT_CHARS,
 	DEFAULT_LIST_LIMIT,
 	DEFAULT_LOG_LIMIT,
+	DEFAULT_RETENTION_LIMIT,
+	DEFAULT_RETENTION_THRESHOLD,
 	DEFAULT_SEARCH_LIMIT,
 	MAX_CONTENT_CODE_POINTS,
 	MAX_ENTITIES,
@@ -55,6 +57,7 @@ export interface ValidatedRecall {
 	limit: number;
 	intent?: RecallIntent;
 	source?: string;
+	category?: InsightCategory;
 	brief: boolean;
 	excerptChars: number;
 }
@@ -293,6 +296,7 @@ export function validateRecallInput(
 		limit?: number;
 		intent?: RecallIntent;
 		source?: string;
+		category?: InsightCategory;
 		brief?: boolean;
 		excerptChars?: number;
 	},
@@ -307,6 +311,7 @@ export function validateRecallInput(
 	if (input.intent && !RECALL_INTENTS.includes(input.intent)) {
 		fail("intent", "invalid_enum", `invalid intent "${input.intent}"`);
 	}
+	validateCategoryFilter(input.category);
 	const brief = input.brief === true;
 	const excerptChars = requireLimit(
 		input.excerptChars ?? DEFAULT_BRIEF_EXCERPT_CHARS,
@@ -318,6 +323,7 @@ export function validateRecallInput(
 		limit,
 		intent: input.intent,
 		source: optionalTrimmed(input.source, "source", MAX_SOURCE_CODE_POINTS),
+		category: input.category,
 		brief,
 		excerptChars,
 	};
@@ -365,13 +371,7 @@ export function validateListInput(input?: {
 		input?.limit ?? DEFAULT_LIST_LIMIT,
 		MAX_LIST_LIMIT,
 	);
-	if (input?.category && !INSIGHT_CATEGORIES.includes(input.category)) {
-		fail(
-			"category",
-			"invalid_enum",
-			`invalid category "${input.category}"; valid: ${INSIGHT_CATEGORIES.join(", ")}`,
-		);
-	}
+	validateCategoryFilter(input?.category);
 	const since = input?.since ? parseTimestamp(input.since, "since") : undefined;
 	const until = input?.until ? parseTimestamp(input.until, "until") : undefined;
 	if (since && until && since.getTime() > until.getTime()) {
@@ -383,6 +383,30 @@ export function validateListInput(input?: {
 		category: input?.category,
 		since,
 		until,
+	};
+}
+
+function validateCategoryFilter(category: InsightCategory | undefined): void {
+	if (category && !INSIGHT_CATEGORIES.includes(category)) {
+		fail(
+			"category",
+			"invalid_enum",
+			`invalid category "${category}"; valid: ${INSIGHT_CATEGORIES.join(", ")}`,
+		);
+	}
+}
+
+export function validateRetentionInput(input?: {
+	threshold?: number;
+	limit?: number;
+}): { threshold: number; limit: number } {
+	const threshold = input?.threshold ?? DEFAULT_RETENTION_THRESHOLD;
+	if (!Number.isFinite(threshold) || threshold < 0) {
+		fail("threshold", "out_of_range", "threshold must be a finite number >= 0");
+	}
+	return {
+		threshold,
+		limit: requireLimit(input?.limit ?? DEFAULT_RETENTION_LIMIT, MAX_LIST_LIMIT),
 	};
 }
 

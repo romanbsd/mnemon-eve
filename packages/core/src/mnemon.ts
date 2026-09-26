@@ -16,6 +16,7 @@ import {
 	DEDUP_CANDIDATE_LIMIT,
 	DEFAULT_RELATED_DEPTH,
 	DEFAULT_RELATED_LIMIT,
+	KEEP_ACCESS_BOOST,
 	MAX_RELATED_DEPTH,
 	MAX_RELATED_LIMIT,
 	MAX_SEMANTIC_EDGES,
@@ -49,7 +50,7 @@ import {
 	composeFinalScore,
 	normalizeEliteGraph,
 } from "./engine/recall.js";
-import { effectiveImportance } from "./engine/retention.js";
+import { effectiveImportance, isImmune } from "./engine/retention.js";
 import { sortedSearchTokens, sortedTokens } from "./engine/tokenize.js";
 import {
 	validateEmbedding,
@@ -59,6 +60,7 @@ import {
 	validateMetadata,
 	validateRecallInput,
 	validateRememberInput,
+	validateRetentionInput,
 	validateSearchInput,
 	validateAuthorization,
 	validateUuid,
@@ -104,6 +106,8 @@ import {
 	type RelatedInsight,
 	type RememberInput,
 	type RememberResult,
+	type RetentionInput,
+	type RetentionResult,
 	type SearchInput,
 	type SearchResult,
 	type SimilarMemory,
@@ -132,6 +136,8 @@ const SCOPED_METHODS = [
 	"list",
 	"log",
 	"status",
+	"retentionCandidates",
+	"keep",
 	"once",
 ] as const satisfies readonly (keyof Mnemon)[];
 
@@ -563,6 +569,9 @@ class MnemonService implements Mnemon {
 				continue;
 			}
 			const insight = row.insight;
+			if (validated.category && insight.category !== validated.category) {
+				continue;
+			}
 			const signals = row.signals;
 			const graph = graphById.get(id) ?? 0;
 			const score = composeFinalScore({
@@ -782,6 +791,78 @@ class MnemonService implements Mnemon {
 			}
 			return entry;
 		});
+	}
+
+	async retentionCandidates(input?: RetentionInput): Promise<RetentionResult> {
+		const { threshold, limit } = validateRetentionInput(input);
+		const now = this.config.clock.now();
+		const scored = (await this.store.listRetentionRows()).map(
+			({ insight, edgeCount }) => {
+				const since = insight.lastAccessedAt ?? insight.createdAt;
+				const daysSinceAccess = Math.max(
+					0,
+					(now.getTime() - since.getTime()) / 86_400_000,
+				);
+				return {
+					insight,
+					edgeCount,
+					daysSinceAccess,
+					effectiveImportance: effectiveImportance({
+						importance: insight.importance,
+						accessCount: insight.accessCount,
+						daysSinceAccess,
+						edgeCount,
+					}),
+				};
+			},
+		);
+		await this.store.withTransaction((tx) =>
+			tx.setEffectiveImportances(
+				new Map(scored.map((s) => [s.insight.id, s.effectiveImportance])),
+			),
+		);
+		const candidates = scored
+			.filter(
+				(s) =>
+					s.effectiveImportance < threshold &&
+					!isImmune(s.insight.importance, s.insight.accessCount),
+			)
+			.sort(
+				(a, b) =>
+					a.effectiveImportance - b.effectiveImportance ||
+					a.insight.id.localeCompare(b.insight.id),
+			);
+		return {
+			total: candidates.length,
+			candidates: candidates
+				.slice(0, limit)
+				.map((c) => ({ ...c, insight: toPublicInsight(c.insight) })),
+		};
+	}
+
+	async keep(id: string): Promise<Insight> {
+		validateUuid(id, "id");
+		const now = this.config.clock.now();
+		const kept = await this.store.withTransaction(async (tx) => {
+			await tx.incrementAccess([id], now, KEEP_ACCESS_BOOST);
+			const record = await this.store.getActiveInsight(id);
+			if (!record) {
+				return null;
+			}
+			const ei = effectiveImportance({
+				importance: record.importance,
+				accessCount: record.accessCount,
+				daysSinceAccess: 0,
+				edgeCount: (await this.store.getEdgesForNodeIds([id])).length,
+			});
+			await tx.setEffectiveImportance(id, ei);
+			await tx.appendOp("gc_keep", id, { effective_importance: ei }, now);
+			return record;
+		});
+		if (!kept) {
+			throw new MnemonNotFoundError(`insight ${id} not found`, id);
+		}
+		return toPublicInsight(kept);
 	}
 
 	async status(): Promise<MnemonStatus> {

@@ -140,6 +140,8 @@ export interface MnemonStore {
 		since: Date;
 		entities: readonly string[];
 	}): Promise<EdgeContext>;
+	/** Every active insight with its edge count. */
+	listRetentionRows(): Promise<{ insight: InsightRecord; edgeCount: number }[]>;
 	getSetting(key: string): Promise<unknown>;
 	/** Serializes concurrent callers of the same key until the transaction ends. */
 	lockOperation(key: string): Promise<void>;
@@ -162,6 +164,7 @@ export interface MnemonStoreTx {
 		at: Date,
 	): Promise<void>;
 	setEffectiveImportance(id: string, value: number): Promise<void>;
+	setEffectiveImportances(values: ReadonlyMap<string, number>): Promise<void>;
 	establishEmbeddingSettings(
 		dimensions: number,
 		model: string,
@@ -169,7 +172,7 @@ export interface MnemonStoreTx {
 	): Promise<void>;
 	linkAndLog(edge: NewEdgeRecord, at: Date): Promise<EdgeRecord>;
 	forgetAndLog(id: string, at: Date): Promise<boolean>;
-	incrementAccess(ids: readonly string[], at: Date): Promise<void>;
+	incrementAccess(ids: readonly string[], at: Date, by?: number): Promise<void>;
 }
 
 function vec(values: readonly number[]): string {
@@ -874,6 +877,26 @@ export class PostgresMnemonStore implements MnemonStore {
 			.map(([id, row]) => ({ id, score: row.score, via: row.via }));
 	}
 
+	// ponytail: loads the whole namespace; page by effective_importance if namespaces grow past ~100k rows.
+	async listRetentionRows(): Promise<
+		{ insight: InsightRecord; edgeCount: number }[]
+	> {
+		const result = await this.client.query<Record<string, unknown>>(
+			`
+      SELECT ${insightSelect(false)},
+             (SELECT count(*) FROM ${this.s}.edges AS e
+              WHERE e.namespace = $1 AND (e.source_id = i.id OR e.target_id = i.id)) AS edge_count
+      FROM ${this.s}.insights AS i
+      WHERE namespace = $1 AND deleted_at IS NULL
+      `,
+			[this.namespace],
+		);
+		return result.rows.map((row) => ({
+			insight: mapInsightRow(row),
+			edgeCount: Number(row.edge_count),
+		}));
+	}
+
 	async getSetting(key: string): Promise<unknown> {
 		const result = await this.client.query<Record<string, unknown>>(
 			`SELECT value FROM ${this.s}.settings WHERE key = $1`,
@@ -1113,6 +1136,21 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 		);
 	}
 
+	async setEffectiveImportances(values: ReadonlyMap<string, number>): Promise<void> {
+		if (values.size === 0) {
+			return;
+		}
+		await this.client.query(
+			`
+      UPDATE ${this.s}.insights AS i
+      SET effective_importance = u.value
+      FROM unnest($2::uuid[], $3::float8[]) AS u(id, value)
+      WHERE i.namespace = $1 AND i.id = u.id
+      `,
+			[this.namespace, [...values.keys()], [...values.values()]],
+		);
+	}
+
 	async establishEmbeddingSettings(
 		dimensions: number,
 		model: string,
@@ -1212,21 +1250,21 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 		return true;
 	}
 
-	async incrementAccess(ids: readonly string[], at: Date): Promise<void> {
+	async incrementAccess(ids: readonly string[], at: Date, by = 1): Promise<void> {
 		if (ids.length === 0) {
 			return;
 		}
 		await this.client.query(
 			`
       UPDATE ${this.s}.insights
-      SET access_count = access_count + 1,
+      SET access_count = access_count + $4,
           last_accessed_at = $3,
           updated_at = GREATEST(updated_at, $3)
       WHERE namespace = $1
         AND id = ANY($2::uuid[])
         AND deleted_at IS NULL
       `,
-			[this.namespace, ids, at],
+			[this.namespace, ids, at, by],
 		);
 	}
 }

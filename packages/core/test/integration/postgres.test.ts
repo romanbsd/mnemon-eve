@@ -544,6 +544,75 @@ describe.skipIf(!available)("postgres integration", () => {
 		});
 	});
 
+	it("filters recall by category", async () => {
+		await withMnemon({ clock }, async (mnemon) => {
+			const decision = await mnemon.remember({
+				content: "deploy process uses blue green releases",
+				category: "decision",
+			});
+			await mnemon.remember({
+				content: "deploy process is documented in the wiki",
+				category: "fact",
+			});
+			const recalled = await mnemon.recall({
+				query: "deploy process",
+				category: "decision",
+			});
+			expect(recalled.results.map((r) => r.insight.id)).toEqual([
+				decision.insight.id,
+			]);
+			await expect(
+				mnemon.recall({ query: "deploy", category: "nope" as never }),
+			).rejects.toThrow(/invalid category/);
+		});
+	});
+
+	it("lists retention candidates and keeps a memory out of them", async () => {
+		await withMnemon({ clock }, async (mnemon) => {
+			clock.set(new Date("2024-01-01T00:00:00Z"));
+			const trivia = await mnemon.remember({
+				content: "the cafeteria served soup on tuesday",
+				importance: 1,
+			});
+			const routine = await mnemon.remember({
+				content: "the team formats code with tabs",
+				importance: 3,
+			});
+			await mnemon.remember({
+				content: "production runs in the eu-west region",
+				importance: 5,
+			});
+			clock.set(new Date("2024-04-01T00:00:00Z"));
+
+			const all = await mnemon.retentionCandidates();
+			expect(all.total).toBe(2);
+			expect(all.candidates.map((c) => c.insight.id)).toEqual([
+				trivia.insight.id,
+				routine.insight.id,
+			]);
+			expect(all.candidates[0]?.daysSinceAccess).toBe(91);
+			expect(all.candidates[0]?.effectiveImportance).toBeLessThan(0.1);
+
+			const first = await mnemon.retentionCandidates({ limit: 1 });
+			expect(first).toMatchObject({ total: 2 });
+			expect(first.candidates).toHaveLength(1);
+			expect(
+				(await mnemon.retentionCandidates({ threshold: 0.01 })).total,
+			).toBe(0);
+
+			expect((await mnemon.keep(trivia.insight.id)).accessCount).toBe(3);
+			const after = await mnemon.retentionCandidates();
+			expect(after.candidates.map((c) => c.insight.id)).toEqual([
+				routine.insight.id,
+			]);
+			expect((await mnemon.log({ operation: "gc_keep" }))[0]?.insightId).toBe(
+				trivia.insight.id,
+			);
+			await expect(mnemon.keep(randomUUID())).rejects.toThrow(/not found/);
+			clock.set(new Date("2024-06-01T00:00:00Z"));
+		});
+	});
+
 	it("searches with stemming, reads the oplog, and reports status", async () => {
 		await withMnemon({ clock }, async (mnemon) => {
 			await mnemon.remember({

@@ -110,6 +110,11 @@ export interface RecallInput {
 	limit?: number;
 	intent?: RecallIntent;
 	source?: string;
+	/**
+	 * Only return memories of this category. Anchors and graph traversal are
+	 * unfiltered, so a match can still pull in related memories of this kind.
+	 */
+	category?: InsightCategory;
 	/** Compact discovery projection: flatten whitespace and truncate content. */
 	brief?: boolean;
 	/** Maximum Unicode code points per brief excerpt. Default 240. Must be > 0. */
@@ -170,6 +175,28 @@ export interface ListInput {
 	category?: InsightCategory;
 	since?: string;
 	until?: string;
+}
+
+export interface RetentionInput {
+	/** Effective importance below which a memory is a candidate. Default 0.5. */
+	threshold?: number;
+	/** Default 20. */
+	limit?: number;
+}
+
+export interface RetentionCandidate {
+	insight: Insight;
+	/** Importance decayed by time since last access, boosted by access and edges. */
+	effectiveImportance: number;
+	daysSinceAccess: number;
+	edgeCount: number;
+}
+
+export interface RetentionResult {
+	/** Candidates before `limit`. */
+	total: number;
+	/** Lowest effective importance first. */
+	candidates: RetentionCandidate[];
 }
 
 export interface SearchHit {
@@ -243,6 +270,14 @@ export interface Mnemon {
 	list(input?: ListInput): Promise<Insight[]>;
 	log(input?: LogInput): Promise<OpLogEntry[]>;
 	status(): Promise<MnemonStatus>;
+	/**
+	 * Memories worth reviewing for `forget`, lowest effective importance first.
+	 * Importance 4+ or 3+ accesses are immune. Refreshes stored effective
+	 * importance for the namespace; never deletes.
+	 */
+	retentionCandidates(input?: RetentionInput): Promise<RetentionResult>;
+	/** Marks a memory worth keeping: +3 accesses and a fresh access time. */
+	keep(id: string): Promise<Insight>;
 	/**
 	 * Runs `fn` at most once per `key` in this namespace and returns the stored
 	 * JSON result on replay. Concurrent callers with the same key serialize.
