@@ -17,8 +17,11 @@ export const MAX_SEARCH_LIMIT = 100;
 export const DEFAULT_LIST_LIMIT = 20;
 export const DEFAULT_RETENTION_LIMIT = 20;
 export const DEFAULT_RETENTION_THRESHOLD = 0.5;
-/** Access count added by `keep`, enough to make a memory immune. */
-export const KEEP_ACCESS_BOOST = 3;
+/** Retention never proposes memories at or above either of these. */
+export const RETENTION_IMMUNE_IMPORTANCE = 4;
+export const RETENTION_IMMUNE_ACCESS = 3;
+/** Access count added by `keep`: exactly enough to make a memory immune. */
+export const KEEP_ACCESS_BOOST = RETENTION_IMMUNE_ACCESS;
 // Operational consistency scans need a bounded whole-namespace view.
 export const MAX_LIST_LIMIT = 10_000;
 export const DEFAULT_LOG_LIMIT = 50;

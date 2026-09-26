@@ -1,3 +1,5 @@
+import { RETENTION_IMMUNE_ACCESS, RETENTION_IMMUNE_IMPORTANCE } from "./constants.js";
+
 const BASE: Record<number, number> = {
 	5: 1,
 	4: 0.8,
@@ -8,7 +10,7 @@ const BASE: Record<number, number> = {
 
 /** High-importance or frequently accessed memories are never retention candidates. */
 export function isImmune(importance: number, accessCount: number): boolean {
-	return importance >= 4 || accessCount >= 3;
+	return importance >= RETENTION_IMMUNE_IMPORTANCE || accessCount >= RETENTION_IMMUNE_ACCESS;
 }
 
 export function effectiveImportance(input: {

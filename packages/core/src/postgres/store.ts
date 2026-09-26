@@ -265,10 +265,10 @@ export class PostgresMnemonStore implements MnemonStore {
 	private async queryInsights(
 		where: string,
 		params: unknown[],
-		options?: { embedding?: boolean },
+		options?: { embedding?: boolean; orderLimit?: string },
 	): Promise<InsightRecord[]> {
 		const result = await this.client.query<Record<string, unknown>>(
-			`SELECT ${insightSelect(options?.embedding === true)} FROM ${this.s}.insights WHERE namespace = $1 AND deleted_at IS NULL AND ${where}`,
+			`SELECT ${insightSelect(options?.embedding === true)} FROM ${this.s}.insights WHERE namespace = $1 AND deleted_at IS NULL AND (${where}) ${options?.orderLimit ?? ""}`,
 			[this.namespace, ...params],
 		);
 		return result.rows.map((row) => mapInsightRow(row));
@@ -904,10 +904,9 @@ export class PostgresMnemonStore implements MnemonStore {
 		limit: number,
 	): Promise<{ total: number; insights: InsightRecord[] }> {
 		const [insights, count] = await Promise.all([
-			this.queryInsights(
-				"embedding IS NULL ORDER BY created_at ASC, id ASC LIMIT $2",
-				[limit],
-			),
+			this.queryInsights("embedding IS NULL", [limit], {
+				orderLimit: "ORDER BY created_at ASC, id ASC LIMIT $2",
+			}),
 			this.client.query<{ total: number }>(
 				`SELECT count(*)::int AS total FROM ${this.s}.insights WHERE namespace = $1 AND deleted_at IS NULL AND embedding IS NULL`,
 				[this.namespace],
@@ -922,11 +921,15 @@ export class PostgresMnemonStore implements MnemonStore {
 	> {
 		const result = await this.client.query<Record<string, unknown>>(
 			`
-      SELECT ${insightSelect(false)},
-             (SELECT count(*) FROM ${this.s}.edges AS e
-              WHERE e.namespace = $1 AND (e.source_id = i.id OR e.target_id = i.id)) AS edge_count
+      WITH ends AS (
+        SELECT source_id AS id FROM ${this.s}.edges WHERE namespace = $1
+        UNION ALL
+        SELECT target_id FROM ${this.s}.edges WHERE namespace = $1 AND target_id <> source_id
+      ), counts AS (SELECT id, count(*) AS n FROM ends GROUP BY id)
+      SELECT ${insightSelect(false)}, coalesce(c.n, 0) AS edge_count
       FROM ${this.s}.insights AS i
-      WHERE namespace = $1 AND deleted_at IS NULL
+      LEFT JOIN counts AS c USING (id)
+      WHERE i.namespace = $1 AND i.deleted_at IS NULL
       `,
 			[this.namespace],
 		);

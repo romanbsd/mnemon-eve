@@ -217,7 +217,7 @@ export function applyDiffJudgments(
 ): DiffResult {
 	const matches = diff.matches.map((m) => {
 		const relation = relations[m.id];
-		return relation && relation in RELATION_SUGGESTION
+		return relation && Object.hasOwn(RELATION_SUGGESTION, relation)
 			? { ...m, suggestion: RELATION_SUGGESTION[relation] }
 			: m;
 	});

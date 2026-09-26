@@ -621,6 +621,8 @@ describe.skipIf(!available)("postgres integration", () => {
 				routine.insight.id,
 			]);
 			expect(all.candidates[0]?.daysSinceAccess).toBe(91);
+			// Temporal and entity edges from remember(); each edge row counts once per end.
+			expect(all.candidates.map((c) => c.edgeCount)).toEqual([4, 4]);
 			expect(all.candidates[0]?.effectiveImportance).toBeLessThan(0.1);
 
 			const first = await mnemon.retentionCandidates({ limit: 1 });
