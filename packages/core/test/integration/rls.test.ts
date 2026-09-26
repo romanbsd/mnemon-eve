@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import { quoteIdent } from "../../src/config.js";
+import { MnemonConfigurationError } from "../../src/errors.js";
 import { createMnemon } from "../../src/mnemon.js";
+import {
+	ensureUserScopePolicy,
+	runMigrations,
+} from "../../src/postgres/migrations.js";
 import { FakeClock } from "../fake-clock.js";
 import { FakeEmbeddingProvider } from "../fake-embedding-provider.js";
 import {
@@ -183,6 +188,40 @@ describe.skipIf(!available)("row-level security", () => {
 			await expect(refused.initialize()).rejects.toThrow(/row-level security|BYPASSRLS|superuser/i);
 			const allowed = createMnemon({ pool: admin, schema, clock, allowRlsBypass: true });
 			await allowed.initialize();
+		} finally {
+			await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdent(schema)} CASCADE`).catch(() => {});
+			await admin.end();
+		}
+	});
+
+	it("refuses a schema migrated to another version", async () => {
+		const admin = adminPool();
+		const schema = uniqueSchema();
+		const s = quoteIdent(schema);
+		try {
+			await admin.query(`CREATE SCHEMA ${s}`);
+			await admin.query(`CREATE TABLE ${s}.schema_migrations (version integer PRIMARY KEY)`);
+			await admin.query(`INSERT INTO ${s}.schema_migrations VALUES (99)`);
+			await expect(runMigrations(admin, schema)).rejects.toThrow(MnemonConfigurationError);
+			await expect(runMigrations(admin, schema)).rejects.toThrow(/version 99 is incompatible/);
+		} finally {
+			await admin.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`).catch(() => {});
+			await admin.end();
+		}
+	});
+
+	it("installs the user-scope policy idempotently", async () => {
+		const admin = adminPool();
+		const schema = uniqueSchema();
+		try {
+			await runMigrations(admin, schema);
+			await ensureUserScopePolicy(admin, schema);
+			await ensureUserScopePolicy(admin, schema);
+			const { rows } = await admin.query<{ n: string }>(
+				"SELECT count(*) AS n FROM pg_policies WHERE schemaname = $1 AND policyname = 'mnemon_user'",
+				[schema],
+			);
+			expect(Number(rows[0]?.n)).toBe(4);
 		} finally {
 			await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdent(schema)} CASCADE`).catch(() => {});
 			await admin.end();

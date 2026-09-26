@@ -6,5 +6,9 @@ export default defineConfig({
 		exclude: [...configDefaults.exclude, "**/*.e2e.test.ts"],
 		// Integration suites share one database; keep files sequential.
 		fileParallelism: false,
+		coverage: {
+			include: ["packages/*/src/**"],
+			reporter: ["text", "html"],
+		},
 	},
 });

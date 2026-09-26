@@ -13,11 +13,13 @@
     "clean": "rm -rf packages/*/dist",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test:e2e": "vitest run -c vitest.e2e.config.ts"
+    "test:e2e": "vitest run -c vitest.e2e.config.ts",
+    "coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^5.0.2",
     "eslint": "^10.11.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.1",

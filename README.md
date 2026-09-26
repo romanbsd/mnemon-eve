@@ -23,7 +23,8 @@ createdb mnemon_test
 DATABASE_URL=postgres://localhost/mnemon_test npm test
 ```
 
-Without `DATABASE_URL`, the integration tests are skipped.
+Without `DATABASE_URL`, the integration tests are skipped. `npm run coverage`
+runs the same suite with V8 coverage; the HTML report goes to `coverage/`.
 
 ## Releasing
 

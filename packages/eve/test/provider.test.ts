@@ -1,5 +1,5 @@
 import type { MnemonClient } from "@mnemon/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { postgresAvailable, withMnemon } from "../../core/test/integration/helpers.js";
 import {
@@ -205,6 +205,94 @@ describe.skipIf(!available)("mnemonMemory", () => {
 			expect(open.map((m) => m.content).join()).toContain("soup");
 			expect(events.at(-1)).toMatchObject({ filterFailed: true });
 		});
+	});
+
+	it("reads only user text from string and part content", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const org = slot(client, "organization", ["tenant-a"]);
+			await org.propose("Refunds over 500 euros need CFO approval");
+			const provider = mnemonMemory({ client, audience: "organization", gate: jevGate({ evaluate: fakeEvaluate }) });
+			const recall = (input: unknown[]) =>
+				provider.recall["turn.started"]({
+					memory: { slot: "organization", scope: { key: "eve-key:organization:tenant-a", namespace: "app", value: ["tenant-a"] } },
+					operationId: crypto.randomUUID(),
+					abortSignal: new AbortController().signal,
+					turn: { id: "t", sequence: 1, input },
+				} as never) as Promise<{ messages: unknown[] }>;
+			const parts = [
+				{ role: "assistant", content: "unrelated" },
+				{ role: "user", content: [{ type: "image", image: "x" }, { type: "text", text: "who approves refunds?" }] },
+			];
+			expect((await recall(parts)).messages).toHaveLength(1);
+			expect((await recall([{ role: "assistant", content: "refunds CFO" }])).messages).toEqual([]);
+		});
+	});
+
+	it("rethrows a recall filter error once the turn is aborted", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			await slot(client, "organization", ["tenant-a"]).propose("Refunds over 500 euros need CFO approval");
+			const controller = new AbortController();
+			const provider = mnemonMemory({
+				client,
+				audience: "organization",
+				gate: jevGate({ evaluate: fakeEvaluate }),
+				recallFilter: async () => {
+					controller.abort();
+					throw new Error("aborted");
+				},
+			});
+			await expect(
+				provider.recall["turn.started"]({
+					memory: { slot: "organization", scope: { key: "eve-key:organization:tenant-a", namespace: "app", value: ["tenant-a"] } },
+					operationId: crypto.randomUUID(),
+					abortSignal: controller.signal,
+					turn: { id: "t", sequence: 1, input: [{ role: "user", content: "who approves refunds?" }] },
+				} as never),
+			).rejects.toThrow("aborted");
+		});
+	});
+
+	it("reports a duplicate the gate missed but Mnemon caught", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const provider = mnemonMemory({
+				client,
+				audience: "organization",
+				gate: async () => ({ accept: true, reasons: [] }),
+			});
+			const memory = { slot: "organization", scope: { key: "eve-key:organization:tenant-a", namespace: "app", value: ["tenant-a"] } };
+			const tools = await provider.tools({ memory, turn: { id: "t", sequence: 1, input: [] } } as never);
+			const tool = tools.propose_memory as unknown as {
+				execute(input: { fact: string }, ctx: unknown): Promise<ProposalResult>;
+			};
+			const propose = (fact: string) =>
+				tool.execute({ fact }, { callId: crypto.randomUUID(), abortSignal: new AbortController().signal });
+			const stored = await propose("Invoices are approved by the finance lead");
+			expect(await propose("Invoices are approved by the finance lead")).toEqual({
+				status: "duplicate",
+				reasons: [],
+				id: (stored as { id: string }).id,
+			});
+		});
+	});
+
+	it("defaults to the heuristic gate without a TypeSafe key", async () => {
+		vi.stubEnv("TYPESAFE_API_KEY", undefined);
+		vi.stubEnv("TYPESAFE_AI_API_KEY", undefined);
+		try {
+			await withMnemon({}, async (_m, { client }) => {
+				const provider = mnemonMemory({ client, audience: "organization" });
+				const memory = { slot: "organization", scope: { key: "eve-key:organization:tenant-a", namespace: "app", value: ["tenant-a"] } };
+				const tools = await provider.tools({ memory, turn: { id: "t", sequence: 1, input: [] } } as never);
+				const tool = tools.propose_memory as unknown as {
+					execute(input: { fact: string }, ctx: unknown): Promise<ProposalResult>;
+				};
+				expect(
+					await tool.execute({ fact: "Thanks, that worked!" }, { callId: "c", abortSignal: new AbortController().signal }),
+				).toMatchObject({ status: "rejected", reasons: ["durable"] });
+			});
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("throws when a slot's scope does not match its audience", async () => {
