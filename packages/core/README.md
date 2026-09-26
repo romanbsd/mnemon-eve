@@ -253,6 +253,48 @@ await memory.keep(candidates[1].insight.id);   // or keep it: +3 accesses, fresh
 A periodic job can forget candidates automatically; prefer a low threshold, or
 have a person or model review them first.
 
+#### Import and receipts
+
+`importDraft` loads a memory draft file: the JSON format of Go mnemon's
+`mnemon import`, so existing drafts work unchanged. The whole draft is
+validated before anything is written. Each insight then goes through
+`remember` (dedupe, entities, automatic edges, embeddings), and `edges` link
+insights by their index in the draft.
+
+```ts
+import { importDraft, memoryReceipt } from "@mnemon/core";
+
+const draft = {
+  schema_version: "1",
+  source: "chat-export", // default source; "import" when omitted
+  insights: [
+    { content: "Billing is owned by the payments team", category: "fact", importance: 4 },
+    { content: "Payments deploys billing on Tuesdays", created_at: "2024-01-15T09:30:00Z" },
+  ],
+  edges: [{ source_index: 0, target_index: 1, edge_type: "causal", weight: 0.9, reason: "owner sets schedule" }],
+};
+const { insights, edges } = await importDraft(memory, draft); // { deduplicate: false } to skip near-duplicate checks
+insights; // [{ index, id, action: "added" | "skipped" }]; skipped ids are the existing memory
+```
+
+On a plain scoped client each write commits separately. To make the import
+all-or-nothing and safe to retry, run it in one authorized transaction:
+
+```ts
+await client.withAuthorization(auth, (tx) =>
+  tx.once(`import:${jobId}`, (m) => importDraft(m, draft)),
+);
+```
+
+`memoryReceipt` exports recent operations for audits. Insight ids and
+operation details are replaced by SHA-256 hashes, so memory contents never
+appear in it.
+
+```ts
+const receipt = await memoryReceipt(memory, { limit: 20 });
+receipt.events; // [{ operation, createdAt, insightIdHash?, detailHash?, detailPresent }]
+```
+
 ### Idempotent operations
 
 `once(key, fn)` runs `fn` at most once per `(tenant, namespace, key)`. The

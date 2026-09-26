@@ -24,6 +24,14 @@ export {
 	OllamaEmbeddingProvider,
 	OpenAIEmbeddingProvider,
 } from "./http-embedding-provider.js";
+export {
+	type ImportResult,
+	importDraft,
+	type MemoryDraft,
+	type MemoryReceipt,
+	memoryReceipt,
+	validateDraft,
+} from "./import.js";
 export { createMnemon } from "./mnemon.js";
 export type {
 	AlgorithmVersion,
