@@ -105,9 +105,12 @@ export function llmGate(options: LlmGateOptions = {}): MemoryGate {
 			// Status only: the body may echo the candidate.
 			throw new MnemonEveGateError(`memory gate request failed with HTTP ${response.status}`);
 		}
-		const payload = (await response.json()) as {
-			choices?: { message?: { content?: string | null } }[];
-		};
+		let payload: { choices?: { message?: { content?: string | null } }[] };
+		try {
+			payload = (await response.json()) as typeof payload;
+		} catch {
+			return { accept: false, reasons: ["invalid-evaluation"] };
+		}
 		let answers: Record<string, unknown> | null;
 		try {
 			answers = JSON.parse(payload.choices?.[0]?.message?.content ?? "") as typeof answers;

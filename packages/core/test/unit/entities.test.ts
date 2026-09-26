@@ -56,4 +56,11 @@ describe("extractEntities", () => {
 			"Hestia",
 		);
 	});
+
+	it("keeps known entities when regex hits fill the cap", () => {
+		const dense = Array.from({ length: 60 }, (_, i) => `Alpha${"x".repeat(i)}Beta`).join(" ");
+		const entities = extractEntitiesIndexed(`${dense} ask Hestia`, new Set(["Hestia"]));
+		expect(entities).toContain("Hestia");
+		expect(entities).toHaveLength(50);
+	});
 });

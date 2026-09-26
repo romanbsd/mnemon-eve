@@ -31,7 +31,6 @@ export interface MnemonConfig {
 		recallLimit?: number;
 	};
 	limits?: {
-		activeInsightSoftLimit?: number;
 		maxRecallCandidates?: number;
 	};
 	/**
@@ -62,7 +61,6 @@ export interface ResolvedConfig {
 		recallLimit: number;
 	};
 	limits: {
-		activeInsightSoftLimit: number;
 		maxRecallCandidates: number;
 	};
 	enforceUserScope: boolean;
@@ -138,7 +136,6 @@ export function resolveConfig(config: MnemonConfig): ResolvedConfig {
 			recallLimit: config.defaults?.recallLimit ?? 10,
 		},
 		limits: {
-			activeInsightSoftLimit: config.limits?.activeInsightSoftLimit ?? 5000,
 			maxRecallCandidates,
 		},
 		enforceUserScope: config.enforceUserScope ?? false,

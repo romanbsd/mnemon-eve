@@ -226,13 +226,13 @@ class PostgresMnemonClient implements MnemonClient {
 		const boxed = { error: undefined as unknown, failed: false };
 		try {
 			return await withTransaction(this.pool, async (client) => {
-			await this.registerVectorTypes(client);
-			// is_local = true: settings vanish at COMMIT/ROLLBACK, so a pooled
-			// connection never carries one caller's identity into the next.
-			await client.query(
-				"SELECT set_config('mnemon.tenant_id', $1, true), set_config('mnemon.user_id', $2, true)",
-				[auth.tenantId, auth.userId ?? ""],
-			);
+				await this.registerVectorTypes(client);
+				// is_local = true: settings vanish at COMMIT/ROLLBACK, so a pooled
+				// connection never carries one caller's identity into the next.
+				await client.query(
+					"SELECT set_config('mnemon.tenant_id', $1, true), set_config('mnemon.user_id', $2, true)",
+					[auth.tenantId, auth.userId ?? ""],
+				);
 				try {
 					return await fn(
 						new MnemonService(
@@ -762,12 +762,12 @@ class MnemonService implements Mnemon {
 				hits,
 				await this.store.loadInsightsByIds(hits.map((h) => h.id)),
 				(hit, insight) => {
-					const via =
-						hit.keyword > 0 && hit.fts > 0
-							? "hybrid"
-							: hit.fts > hit.keyword
-								? "fts"
-								: "keyword";
+					let via: "keyword" | "fts" | "hybrid" = "keyword";
+					if (hit.keyword > 0 && hit.fts > 0) {
+						via = "hybrid";
+					} else if (hit.fts > hit.keyword) {
+						via = "fts";
+					}
 					return {
 						insight: toPublicInsight(insight),
 						score:

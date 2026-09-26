@@ -131,7 +131,7 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 				const { value: messages, replayed } = await client.withAuthorization(
 					scope.auth,
 					(tx) =>
-						tx.once(`recall:${digest(ctx.operationId)}`, async (m) => {
+						tx.once(`recall:${digest(ctx.operationId, ctx.memory.slot)}`, async (m) => {
 							if (!query) return [];
 							// ponytail: over-fetch 2x so filtering still fills the limit.
 							const { results } = await m.recall({

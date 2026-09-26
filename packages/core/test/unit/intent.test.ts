@@ -23,4 +23,9 @@ describe("detectIntent", () => {
 	it("detects CJK WHY", () => {
 		expect(detectIntent("为什么选择这个")).toBe("WHY");
 	});
+
+	it("counts overlapping terms once, like Go", () => {
+		// "tell me about" is one ENTITY hit, not two, so two WHY terms win.
+		expect(detectIntent("why, tell me about the reason")).toBe("WHY");
+	});
 });

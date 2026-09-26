@@ -49,7 +49,6 @@ function extractCjkTitles(text: string, add: (value: string) => void): void {
 	}
 }
 
-const RE_WIDE_CAPITAL = /\b([A-Z][a-zA-Z0-9]+)\b/g;
 
 function scanWords(text: string, visit: (word: string) => void): void {
 	for (const word of text.split(/[^a-zA-Z0-9]+/u)) {
@@ -60,6 +59,10 @@ function scanWords(text: string, visit: (word: string) => void): void {
 }
 
 export function extractEntities(text: string): string[] {
+	return extractUncapped(text).slice(0, MAX_ENTITIES);
+}
+
+function extractUncapped(text: string): string[] {
 	const out: string[] = [];
 	const seen = new Set<string>();
 	const add = (entity: string): void => {
@@ -87,41 +90,21 @@ export function extractEntities(text: string): string[] {
 			out.push(word);
 		}
 	});
-	return out.slice(0, MAX_ENTITIES);
+	return out;
 }
 
 export function extractEntitiesIndexed(
 	text: string,
 	knownEntities: ReadonlySet<string>,
 ): string[] {
-	const entities = extractEntities(text);
-	if (knownEntities.size === 0) {
-		return entities;
-	}
-	const seen = new Set(entities);
-	addMatches(text, RE_WIDE_CAPITAL, 1, (cand) => {
-		if (
-			seen.has(cand) ||
-			ACRONYM_STOPWORDS.has(cand) ||
-			!knownEntities.has(cand)
-		) {
-			return;
-		}
-		seen.add(cand);
-		entities.push(cand);
-	});
+	// Known entities first, so regex hits in dense text cannot crowd them out of the cap.
+	const known: string[] = [];
 	scanWords(text, (word) => {
-		if (
-			seen.has(word) ||
-			ACRONYM_STOPWORDS.has(word) ||
-			!knownEntities.has(word)
-		) {
-			return;
+		if (knownEntities.has(word) && !ACRONYM_STOPWORDS.has(word) && !known.includes(word)) {
+			known.push(word);
 		}
-		seen.add(word);
-		entities.push(word);
 	});
-	return entities.slice(0, MAX_ENTITIES);
+	return [...new Set([...known, ...extractUncapped(text)])].slice(0, MAX_ENTITIES);
 }
 
 export function mergeEntities(

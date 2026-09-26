@@ -11,7 +11,9 @@ export const SECRET_PATTERNS = [
 	/\bsk-[A-Za-z0-9_-]{20,}/,
 	/\bxox[abprs]-[A-Za-z0-9-]{10,}/,
 	/\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{10,}/,
-	/\b(?:password|passwd|api[_-]?key|secret|token)\s*[:=]\s*\S{6,}/i,
+	// Value must look generated (digit, symbol, or inner capital), so prose
+	// like "Token: rotate every 90 days" still reaches the gate.
+	/\b(?i:password|passwd|api[_-]?key|secret|token)\s*[:=]\s*(?=\S*[\d_]|\S*[^\s\w]|\S+[A-Z])\S{6,}/,
 ];
 
 const SECRET_WORD =

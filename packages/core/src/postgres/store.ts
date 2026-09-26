@@ -196,15 +196,32 @@ function dbString(value: unknown, column: string): string {
 	throw new MnemonDatabaseError(`database column ${column} is not text`);
 }
 
+// Every driver failure leaves the store as MnemonDatabaseError, reads included.
+function wrapQueries(client: PoolClient): PoolClient {
+	return new Proxy(client, {
+		get(target, prop, receiver) {
+			if (prop !== "query") return Reflect.get(target, prop, receiver) as unknown;
+			return (...args: unknown[]) =>
+				(target.query as (...a: unknown[]) => Promise<unknown>)
+					.apply(target, args)
+					.catch((error: unknown) => {
+						throw wrapDatabaseError(error);
+					});
+		},
+	});
+}
+
 export class PostgresMnemonStore implements MnemonStore {
 	private readonly s: string;
+	private readonly client: PoolClient;
 
 	/** `client` must already be inside an authorized transaction. */
 	constructor(
-		private readonly client: PoolClient,
+		client: PoolClient,
 		schema: string,
 		private readonly namespace: string,
 	) {
+		this.client = wrapQueries(client);
 		this.s = quoteIdent(schema);
 	}
 

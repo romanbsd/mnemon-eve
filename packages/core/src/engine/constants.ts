@@ -388,10 +388,3 @@ export const ENABLES_PHRASES = [
 	"为了",
 	"以便",
 ];
-export const CAUSES_PHRASES = [
-	"because",
-	"caused by",
-	"due to",
-	"因为",
-	"由于",
-];

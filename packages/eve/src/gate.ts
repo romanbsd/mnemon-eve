@@ -129,8 +129,9 @@ export function classification(
 	if (INSIGHT_CATEGORIES.includes(category as InsightCategory)) {
 		out.category = category as InsightCategory;
 	}
-	if (typeof importance === "number" && importance >= 1 && importance <= 5) {
-		out.importance = Math.round(importance) as 1 | 2 | 3 | 4 | 5;
+	const rounded = typeof importance === "number" ? Math.round(importance) : NaN;
+	if (rounded >= 1 && rounded <= 5) {
+		out.importance = rounded as 1 | 2 | 3 | 4 | 5;
 	}
 	return out;
 }

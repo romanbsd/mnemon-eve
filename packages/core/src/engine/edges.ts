@@ -81,7 +81,7 @@ export function buildTemporalEdges(input: {
 	recentWithin24h: readonly { id: string; createdAt: Date }[];
 }): NewEdge[] {
 	const edges: NewEdge[] = [];
-	if (input.latestSameSource) {
+	if (input.latestSameSource && input.latestSameSource.id !== input.newId) {
 		edges.push(
 			...bidirectional(
 				input.latestSameSource.id,

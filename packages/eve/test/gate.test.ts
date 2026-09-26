@@ -104,6 +104,14 @@ describe("llmGate", () => {
 			MnemonEveGateError,
 		);
 	});
+
+	it("fails closed on a 2xx body that is not JSON", async () => {
+		const html = (async () => new Response("<html>proxy</html>")) as unknown as typeof fetch;
+		expect(await llmGate({ fetch: html })(input)).toEqual({
+			accept: false,
+			reasons: ["invalid-evaluation"],
+		});
+	});
 });
 
 describe("jevGate", () => {
@@ -155,6 +163,11 @@ describe("jevGate", () => {
 		});
 		expect(asked).toContain("category");
 		expect(asked).toContain("importance");
+		// Round before bounds-checking: 4.2 + 1 rounds to 5, not the default.
+		const top = jevGate({
+			evaluate: async () => ({ answers: { ...answers, importance: { score: 4.2 } } }),
+		});
+		expect(await top(input)).toMatchObject({ importance: 5 });
 		const rejected = jevGate({
 			evaluate: async () => ({ answers: { ...answers, durable: p(0.1) } }),
 		});

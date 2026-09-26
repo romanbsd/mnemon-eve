@@ -293,6 +293,8 @@ export interface Mnemon {
 	/**
 	 * Runs `fn` at most once per `key` in this namespace and returns the stored
 	 * JSON result on replay. Concurrent callers with the same key serialize.
+	 * `fn` should resolve to a JSON value: `undefined` replays as `null`, and
+	 * values such as `Date` replay in their JSON form.
 	 */
 	once<T>(key: string, fn: (mnemon: Mnemon) => Promise<T>): Promise<OnceResult<T>>;
 }

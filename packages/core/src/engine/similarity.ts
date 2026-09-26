@@ -3,8 +3,7 @@ export function jaccardTokenSimilarity(a: Set<string>, b: Set<string>): number {
 		return 0;
 	}
 	const inter = intersectionCount(a, b);
-	const union = a.size + b.size - inter;
-	return union === 0 ? 0 : inter / union;
+	return inter / (a.size + b.size - inter);
 }
 
 export function symmetricTokenSimilarity(

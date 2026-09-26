@@ -26,17 +26,21 @@ export async function runMigrations(
 	const s = quoteIdent(schema);
 	// Read-only fast path: an already-migrated schema needs no DDL, so the
 	// app role can run with DML grants only while an owner role migrates.
-	const exists = await pool.query<{ found: boolean }>(
-		"SELECT to_regclass($1) IS NOT NULL AS found",
-		[`${s}.schema_migrations`],
-	);
-	if (exists.rows[0]?.found) {
-		const current = await pool.query<{ version: number | null }>(
-			`SELECT max(version) AS version FROM ${s}.schema_migrations`,
+	try {
+		const exists = await pool.query<{ found: boolean }>(
+			"SELECT to_regclass($1) IS NOT NULL AS found",
+			[`${s}.schema_migrations`],
 		);
-		if (current.rows[0]?.version === MIGRATION_VERSION) {
-			return MIGRATION_VERSION;
+		if (exists.rows[0]?.found) {
+			const current = await pool.query<{ version: number | null }>(
+				`SELECT max(version) AS version FROM ${s}.schema_migrations`,
+			);
+			if (current.rows[0]?.version === MIGRATION_VERSION) {
+				return MIGRATION_VERSION;
+			}
 		}
+	} catch (error) {
+		throw wrapDatabaseError(error);
 	}
 	try {
 		await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
@@ -217,6 +221,7 @@ export async function runMigrations(
 			await client.query(`ALTER TABLE ${s}.${table} ENABLE ROW LEVEL SECURITY`);
 			// FORCE applies the policy to the table owner too.
 			await client.query(`ALTER TABLE ${s}.${table} FORCE ROW LEVEL SECURITY`);
+			await client.query(`DROP POLICY IF EXISTS mnemon_tenant ON ${s}.${table}`);
 			await client.query(
 				`CREATE POLICY mnemon_tenant ON ${s}.${table} USING (${TENANT_MATCH}) WITH CHECK (${TENANT_MATCH})`,
 			);

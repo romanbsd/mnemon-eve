@@ -7,55 +7,27 @@ import {
 	WHY_TERMS,
 } from "./constants.js";
 
-function countTerm(haystack: string, term: string): number {
-	if (term.length === 0) {
-		return 0;
-	}
-	if (
-		Array.from(term).some((character) => (character.codePointAt(0) ?? 0) > 0x7f)
-	) {
-		let count = 0;
-		let pos = 0;
-		while (pos <= haystack.length - term.length) {
-			const i = haystack.indexOf(term, pos);
-			if (i === -1) {
-				break;
-			}
-			count++;
-			pos = i + term.length;
-		}
-		return count;
-	}
-	if (term.includes(" ")) {
-		let count = 0;
-		let pos = 0;
-		while (pos <= haystack.length - term.length) {
-			const i = haystack.indexOf(term, pos);
-			if (i === -1) {
-				break;
-			}
-			count++;
-			pos = i + term.length;
-		}
-		return count;
-	}
-	const re = new RegExp(`\\b${term}\\b`, "g");
-	return haystack.match(re)?.length ?? 0;
+// One alternation per list, like Go's regexp: matches never overlap, so
+// "tell me about" counts once, not also as "about".
+function termPattern(terms: readonly string[]): RegExp {
+	const ascii = terms.filter((t) => /^[\x20-\x7e]+$/.test(t));
+	const other = terms.filter((t) => !ascii.includes(t));
+	return new RegExp(`\\b(?:${ascii.join("|")})\\b|${other.join("|")}`, "g");
 }
 
-function countTerms(query: string, terms: readonly string[]): number {
-	let total = 0;
-	for (const term of terms) {
-		total += countTerm(query, term);
-	}
-	return total;
+const WHY = termPattern(WHY_TERMS);
+const WHEN = termPattern(WHEN_TERMS);
+const ENTITY = termPattern(ENTITY_TERMS);
+
+function countTerms(query: string, pattern: RegExp): number {
+	return query.match(pattern)?.length ?? 0;
 }
 
 export function detectIntent(query: string): RecallIntent {
 	const q = query.toLowerCase();
-	const why = countTerms(q, WHY_TERMS);
-	const when = countTerms(q, WHEN_TERMS);
-	const entity = countTerms(q, ENTITY_TERMS);
+	const why = countTerms(q, WHY);
+	const when = countTerms(q, WHEN);
+	const entity = countTerms(q, ENTITY);
 	if (why > when && why > entity && why > 0) {
 		return "WHY";
 	}

@@ -35,7 +35,7 @@ export function appPool(): Pool {
 }
 
 export function postgresAvailable(): Promise<boolean> {
-	prepared ??= prepare();
+	prepared ??= prepare().catch(() => false);
 	return prepared;
 }
 
@@ -58,14 +58,14 @@ async function prepare(): Promise<boolean> {
 		await pool.query(`
       DO $$ BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${APP_ROLE}') THEN
-          CREATE ROLE ${APP_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS;
+          CREATE ROLE ${quoteIdent(APP_ROLE)} NOLOGIN NOSUPERUSER NOBYPASSRLS;
         END IF;
       END $$`);
 		const db = await pool.query<{ db: string }>(
 			"SELECT current_database() AS db",
 		);
 		await pool.query(
-			`GRANT CREATE ON DATABASE ${quoteIdent(db.rows[0]?.db ?? "")} TO ${APP_ROLE}`,
+			`GRANT CREATE ON DATABASE ${quoteIdent(db.rows[0]?.db ?? "")} TO ${quoteIdent(APP_ROLE)}`,
 		);
 		return true;
 	} finally {
