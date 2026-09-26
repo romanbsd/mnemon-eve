@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildCausalEdges,
+	buildJudgedCausalEdges,
 	buildEntityEdges,
 	buildSemanticEdges,
 	buildTemporalEdges,
@@ -186,5 +187,36 @@ describe("Mnemon deterministic edge builders", () => {
 				},
 			]),
 		).toEqual({ temporal: 0, semantic: 0, causal: 1, entity: 1 });
+	});
+});
+
+describe("judged causal edges", () => {
+	it("orients edges by relation and drops none, invalid, and self entries", () => {
+		const edges = buildJudgedCausalEdges({
+			newId: "n",
+			judgments: {
+				a: { relation: "existing_causes_new", weight: 0.8 },
+				b: { relation: "new_prevents_existing", weight: 0.6 },
+				c: { relation: "none", weight: 0.9 },
+				d: { relation: "existing_enables_new", weight: 1.5 },
+				n: { relation: "existing_causes_new", weight: 0.9 },
+			},
+		});
+		expect(edges).toEqual([
+			{
+				sourceId: "a",
+				targetId: "n",
+				edgeType: "causal",
+				weight: 0.8,
+				metadata: { sub_type: "causes", created_by: "judge" },
+			},
+			{
+				sourceId: "n",
+				targetId: "b",
+				edgeType: "causal",
+				weight: 0.6,
+				metadata: { sub_type: "prevents", created_by: "judge" },
+			},
+		]);
 	});
 });

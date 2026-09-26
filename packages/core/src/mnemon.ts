@@ -25,13 +25,16 @@ import {
 	TEMPORAL_WINDOW_HOURS,
 } from "./engine/constants.js";
 import {
+	applyDiffJudgments,
 	classifyDiff,
 	classifySafeDuplicate,
+	type DiffResult,
 	scoreDuplicateCandidate,
 } from "./engine/diff.js";
 import {
 	buildCausalEdges,
 	buildEntityEdges,
+	buildJudgedCausalEdges,
 	buildSemanticEdges,
 	buildTemporalEdges,
 	countEdgesByType,
@@ -316,7 +319,7 @@ class MnemonService implements Mnemon {
 		}
 
 		const near = await this.findNearDuplicates(validated.content, embedding);
-		const diff = classifyDiff(validated.content, near);
+		let diff = classifyDiff(validated.content, near);
 		if (validated.deduplicate) {
 			const classified = classifySafeDuplicate(validated.content, near);
 			if (classified) {
@@ -326,6 +329,7 @@ class MnemonService implements Mnemon {
 				}
 			}
 		}
+		diff = await this.judgeDiff(validated.content, near, diff);
 
 		const known = new Set(await this.store.listKnownEntities());
 		const extracted = extractEntitiesIndexed(validated.content, known);
@@ -824,6 +828,29 @@ class MnemonService implements Mnemon {
 		}
 	}
 
+	private async judgeDiff(
+		content: string,
+		candidates: readonly { id: string; content: string }[],
+		diff: DiffResult,
+	): Promise<DiffResult> {
+		const judge = this.config.diffJudge;
+		if (!judge || candidates.length === 0) {
+			return diff;
+		}
+		try {
+			const relations = await judge({
+				content,
+				candidates: candidates.map(({ id, content }) => ({ id, content })),
+			});
+			return applyDiffJudgments(diff, relations);
+		} catch {
+			// ponytail: the suggestion is informational, so a judge outage must not
+			// fail the write; the heuristic result stands. Add a hook to observe
+			// judge failures if silent fallback hides a misconfiguration.
+			return diff;
+		}
+	}
+
 	private async skipDuplicate(
 		existing: InsightRecord,
 		now: Date,
@@ -920,11 +947,11 @@ class MnemonService implements Mnemon {
 			newId: insight.id,
 			pairs: context.entityPairs,
 		});
-		const causal = buildCausalEdges({
-			newId: insight.id,
-			newContent: insight.content,
-			previous: context.causalPrevious,
-		});
+		const causal = await this.causalEdges(
+			insight.id,
+			insight.content,
+			context.causalPrevious,
+		);
 
 		let semantic: ReturnType<typeof buildSemanticEdges> = [];
 		if (insight.embedding) {
@@ -942,6 +969,26 @@ class MnemonService implements Mnemon {
 		}
 
 		return [...temporal, ...entity, ...causal, ...semantic];
+	}
+
+	private async causalEdges(
+		newId: string,
+		newContent: string,
+		previous: readonly { id: string; content: string }[],
+	) {
+		const judge = this.config.causalJudge;
+		if (judge && previous.length > 0) {
+			try {
+				const judgments = await judge({
+					content: newContent,
+					previous: previous.map(({ id, content }) => ({ id, content })),
+				});
+				return buildJudgedCausalEdges({ newId, judgments });
+			} catch {
+				// ponytail: same silent fallback as judgeDiff; edges are derived data.
+			}
+		}
+		return buildCausalEdges({ newId, newContent, previous });
 	}
 
 	private async semanticCandidates(

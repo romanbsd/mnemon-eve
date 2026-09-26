@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyDiff,
 	classifySafeDuplicate,
+	applyDiffJudgments,
 	classifySuggestion,
 	isSafeDuplicate,
 } from "../../src/engine/diff.js";
@@ -189,5 +190,24 @@ describe("Go Diff classifier (suggestion only)", () => {
 			},
 		]);
 		expect(result.suggestion).toBe("CONFLICT");
+	});
+});
+
+describe("diff judgments", () => {
+	it("replaces judged suggestions and recomputes the overall one", () => {
+		const diff = classifyDiff("Deploy on Fridays is allowed", [
+			{ id: "a", content: "Deploy on Fridays is allowed" },
+			{ id: "b", content: "Invoices go to finance" },
+		]);
+		expect(diff.suggestion).toBe("DUPLICATE");
+		const judged = applyDiffJudgments(diff, { a: "refines", b: "contradicts" });
+		expect(judged.matches.map((m) => [m.id, m.suggestion])).toEqual([
+			["a", "UPDATE"],
+			["b", "CONFLICT"],
+		]);
+		expect(judged.suggestion).toBe("CONFLICT");
+		const partial = applyDiffJudgments(diff, { a: "unrelated" });
+		expect(partial.suggestion).toBe("ADD");
+		expect(partial.matches[1]).toEqual(diff.matches[1]);
 	});
 });

@@ -24,6 +24,7 @@ PostgreSQL row-level security enforces the tenant boundary.
 - [How it works](#how-it-works)
 - [Options](#options)
 - [Gates](#gates)
+- [Judges](#judges)
 - [Observability](#observability)
 - [Security model](#security-model)
 - [Testing your agent](#testing-your-agent)
@@ -282,8 +283,9 @@ fields. The tool runs these steps:
 2. Recalls up to `relatedLimit` related memories from the same partition,
    under the same RLS context.
 3. Asks the gate for a decision.
-4. On acceptance, stores the fact with source `eve:<slot>` and near-duplicate
-   detection.
+4. On acceptance, stores the fact with source `eve:<slot>`, the category and
+   importance the gate assigned (Mnemon defaults when it assigns none), and
+   near-duplicate detection.
 
 It returns:
 
@@ -318,7 +320,12 @@ mnemonMemory({
 A gate is a function:
 
 ```ts
-type MemoryGate = (input: MemoryGateInput) => Promise<{ accept: boolean; reasons: string[] }>;
+type MemoryGate = (input: MemoryGateInput) => Promise<{
+  accept: boolean;
+  reasons: string[];
+  category?: InsightCategory;   // stored category; omitted uses the Mnemon default
+  importance?: 1 | 2 | 3 | 4 | 5; // stored importance; omitted uses the Mnemon default
+}>;
 
 interface MemoryGateInput {
   fact: string;
@@ -344,6 +351,11 @@ policy (`decide`). A fact is stored only if it is:
 
 `reasons` lists the flags that failed.
 
+Accepted facts are also classified in the same request: `CATEGORY_QUESTION`
+picks one of Mnemon's categories and `IMPORTANCE_QUESTION` rates importance
+1 to 5, which drives recall ranking and retention. An invalid classification is
+dropped and the Mnemon default applies; it never rejects a fact.
+
 ### jevGate (default)
 
 Uses `evaluate` from `eve/ai`, which means TypeSafe Jev through Vercel AI
@@ -357,6 +369,9 @@ jevGate({ threshold: 0.7 });                // stricter: a flag counts as true a
 jevGate({ model: "typesafe-ai/jev" });      // any AI SDK evaluation model id or instance
 ```
 
+The same request also asks `CATEGORY_QUESTION` (a choice) and
+`IMPORTANCE_QUESTION` (a five-level score, rounded to importance 1–5).
+
 A higher `threshold` means a flag needs more confidence to count as true. It
 makes `durable` and `appropriateAudience` harder to pass, but `transient`,
 `duplicate`, and `sensitive` easier to pass too. Tune it on your own data.
@@ -364,7 +379,8 @@ makes `durable` and `appropriateAudience` harder to pass, but `transient`,
 ### llmGate
 
 Calls any OpenAI-compatible `POST {baseURL}/chat/completions` with a strict
-JSON schema response:
+JSON schema response: the five flags as booleans, plus `category` and
+`importance` (1–5).
 
 ```ts
 import { llmGate } from "@mnemon/eve";
@@ -443,6 +459,37 @@ For a gate backed by another model, reuse `gateState(input)` (the JSON state),
 - The gate runs inside the database transaction that guarantees
   exactly-once. Each proposal in flight holds one pooled connection for the
   duration of the gate call, so size the pool for concurrent proposals.
+
+## Judges
+
+`@mnemon/core` can replace two `remember` heuristics with judges (see
+[core Judges](../core#judges)). This package ships Jev-backed ones. Each asks
+one choice per existing memory, all in a single `evaluate` request:
+
+| Judge | Core option | Asks |
+| --- | --- | --- |
+| `jevDiffJudge()` | `diffJudge` | Does the new memory duplicate, refine, contradict, or not relate to each similar memory? Drives `suggestion`. |
+| `jevCausalJudge()` | `causalJudge` | Is there a causal link to each recent memory, which direction, and is it causes, enables, or prevents? Edge weight is the chosen relation's probability. |
+
+```ts
+import { createMnemon } from "@mnemon/core";
+import { jevCausalJudge, jevDiffJudge } from "@mnemon/eve";
+
+const mnemon = createMnemon({
+  databaseUrl,
+  diffJudge: jevDiffJudge(),
+  causalJudge: jevCausalJudge({ model: "typesafe-ai/jev" }), // model optional
+});
+```
+
+Both accept `{ model, evaluate }`; `evaluate` lets tests inject a fake. The
+option descriptions are exported as `DIFF_RELATION_CRITERIA` and
+`CAUSAL_RELATION_CRITERIA`.
+
+Each judge adds one evaluation to writes that have something to compare. The
+Eve `suggestion` is informational and nothing here acts on it; causal edges
+affect `WHY` recall and `related(..., { edgeType: "causal" })`. If a judge
+fails, core keeps the heuristic result and the write succeeds.
 
 ## Observability
 

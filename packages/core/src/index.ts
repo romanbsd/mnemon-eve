@@ -1,6 +1,8 @@
 export type { Clock } from "./clock.js";
 export type { MnemonConfig } from "./config.js";
 export type { EmbeddingProvider } from "./embedding-provider.js";
+export type { DiffJudge } from "./engine/diff.js";
+export type { CausalJudge } from "./engine/edges.js";
 export { makeBriefExcerpt } from "./engine/brief.js";
 export {
 	MnemonConfigurationError,
@@ -26,6 +28,8 @@ export { createMnemon } from "./mnemon.js";
 export type {
 	AlgorithmVersion,
 	DiffMatch,
+	CausalRelation,
+	DiffRelation,
 	DiffSuggestion,
 	Edge,
 	EdgeType,
@@ -56,4 +60,10 @@ export type {
 	SearchResult,
 	SimilarMemory,
 } from "./types.js";
-export { EDGE_TYPES, INSIGHT_CATEGORIES, RECALL_INTENTS } from "./types.js";
+export {
+	CAUSAL_RELATIONS,
+	DIFF_RELATIONS,
+	EDGE_TYPES,
+	INSIGHT_CATEGORIES,
+	RECALL_INTENTS,
+} from "./types.js";

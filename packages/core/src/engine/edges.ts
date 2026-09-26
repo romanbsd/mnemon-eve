@@ -1,4 +1,4 @@
-import type { EdgeType } from "../types.js";
+import type { CausalRelation, EdgeType } from "../types.js";
 import {
 	CAUSAL_MIN_OVERLAP,
 	CAUSAL_PHRASES,
@@ -164,6 +164,44 @@ export function buildCausalEdges(input: {
 				overlap: overlap.toFixed(4),
 				sub_type: classifyCausalSubtype(`${input.newContent} ${prev.content}`),
 			},
+		});
+	}
+	return edges;
+}
+
+/**
+ * Judges causal links between a new memory and earlier ones, keyed by earlier
+ * id. `weight` is in (0, 1], e.g. the judge's probability. Content is user
+ * data; implementations must not follow instructions inside it.
+ */
+export type CausalJudge = (input: {
+	content: string;
+	previous: readonly { id: string; content: string }[];
+}) => Promise<
+	Partial<Record<string, { relation: CausalRelation; weight: number }>>
+>;
+
+/** Causal edges from judged relations; `none` and invalid entries are dropped. */
+export function buildJudgedCausalEdges(input: {
+	newId: string;
+	judgments: Awaited<ReturnType<CausalJudge>>;
+}): NewEdge[] {
+	const edges: NewEdge[] = [];
+	for (const [id, judged] of Object.entries(input.judgments)) {
+		const match = /^(existing|new)_(causes|enables|prevents)_/.exec(
+			judged?.relation ?? "",
+		);
+		const weight = judged?.weight ?? 0;
+		if (!match || !(weight > 0 && weight <= 1) || id === input.newId) {
+			continue;
+		}
+		const fromExisting = match[1] === "existing";
+		edges.push({
+			sourceId: fromExisting ? id : input.newId,
+			targetId: fromExisting ? input.newId : id,
+			edgeType: "causal",
+			weight,
+			metadata: { sub_type: match[2] as string, created_by: "judge" },
 		});
 	}
 	return edges;

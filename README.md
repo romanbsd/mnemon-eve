@@ -5,8 +5,9 @@ Monorepo for:
 - [`@mnemon/core`](packages/core): a TypeScript [Mnemon](https://github.com/mnemon-dev/mnemon)
   memory engine on PostgreSQL + pgvector with tenant row-level security.
 - [`@mnemon/eve`](packages/eve): an [Eve](https://github.com/vercel/eve) memory provider
-  with organization and per-user slots and a pluggable write gate (Jev or any
-  OpenAI-compatible LLM).
+  with organization and per-user slots, a pluggable write gate (Jev or any
+  OpenAI-compatible LLM) that also sets category and importance, and optional
+  Jev judges for Mnemon's duplicate/conflict suggestions and causal edges.
 
 The design is in [`docs/eve-mnemon-memory-adapter-spec.md`](docs/eve-mnemon-memory-adapter-spec.md).
 

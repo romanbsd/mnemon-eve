@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 
+import type { DiffJudge } from "../../src/engine/diff.js";
+import type { CausalJudge } from "../../src/engine/edges.js";
 import { createMnemon } from "../../src/mnemon.js";
 import { FakeClock } from "../fake-clock.js";
 import {
@@ -252,6 +254,51 @@ describe.skipIf(!available)("postgres integration", () => {
 			expect(conflict.action).toBe("added");
 			expect(conflict.suggestion).toBe("CONFLICT");
 			expect(await mnemon.get(base.insight.id)).not.toBeNull();
+		});
+	});
+
+	it("uses the diff judge and keeps the heuristic when it fails", async () => {
+		const judged = new Map<string, number>();
+		const diffJudge: DiffJudge = async ({ content, candidates }) => {
+			judged.set(content, candidates.length);
+			if (content.startsWith("Boom")) throw new Error("judge down");
+			return Object.fromEntries(candidates.map((c) => [c.id, "contradicts"]));
+		};
+		await withMnemon({ clock, diffJudge }, async (mnemon) => {
+			await mnemon.remember({ content: "Prefer TypeScript for services" });
+			expect(judged.size).toBe(0);
+			const neg = await mnemon.remember({
+				content: "Do not prefer TypeScript for services",
+			});
+			expect(neg.suggestion).toBe("CONFLICT");
+			expect(neg.diff.every((m) => m.suggestion === "CONFLICT")).toBe(true);
+			const boom = await mnemon.remember({
+				content: "Boom prefer TypeScript for services",
+			});
+			expect(boom.action).toBe("added");
+			expect(boom.suggestion).not.toBe("CONFLICT");
+			expect(judged.get("Boom prefer TypeScript for services")).toBeGreaterThan(0);
+		});
+	});
+
+	it("uses the causal judge and keeps the heuristic when it fails", async () => {
+		const causalJudge: CausalJudge = async ({ content, previous }) => {
+			if (content.startsWith("Boom")) throw new Error("judge down");
+			return Object.fromEntries(
+				previous.map((p) => [p.id, { relation: "existing_causes_new", weight: 0.7 }]),
+			);
+		};
+		await withMnemon({ clock, causalJudge }, async (mnemon) => {
+			const first = await mnemon.remember({ content: "Nightly builds kept timing out" });
+			expect(first.edgeCounts.causal).toBe(0);
+			const second = await mnemon.remember({ content: "We moved CI to larger runners" });
+			expect(second.edgeCounts.causal).toBe(1);
+			const via = await mnemon.related(second.insight.id, { edgeType: "causal" });
+			expect(via.map((r) => r.id)).toContain(first.insight.id);
+			// Heuristic fallback: no causal phrase, so no causal edges.
+			const boom = await mnemon.remember({ content: "Boom the office moved downtown" });
+			expect(boom.action).toBe("added");
+			expect(boom.edgeCounts.causal).toBe(0);
 		});
 	});
 

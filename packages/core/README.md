@@ -23,6 +23,7 @@ Using [Eve](https://github.com/vercel/eve)? See [`@mnemon/eve`](../eve).
 - [Tenancy and RLS](#tenancy-and-rls)
 - [Database roles](#database-roles)
 - [Embeddings](#embeddings)
+- [Judges](#judges)
 - [Errors](#errors)
 - [Maintenance](#maintenance)
 - [Development](#development)
@@ -86,6 +87,8 @@ indexes, and RLS policies.
 | `schema` | `"mnemon"` | Postgres schema, `[a-z_][a-z0-9_]*`. |
 | `embeddingProvider` | none | Enables vector recall and semantic edges. See [Embeddings](#embeddings). |
 | `embeddingDimensions` | provider's | Must match the provider if both are set. |
+| `diffJudge` | none | Replaces the heuristic `remember` suggestion. See [Judges](#judges). |
+| `causalJudge` | none | Replaces the heuristic causal edges. See [Judges](#judges). |
 | `enforceUserScope` | `false` | Installs the per-user RLS policy. See [Per-user isolation](#per-user-isolation-opt-in). |
 | `allowRlsBypass` | `false` | Allows superuser or `BYPASSRLS` roles, e.g. for a migration step. |
 | `defaults.category` | `"general"` | Default category for `remember`. |
@@ -174,7 +177,9 @@ result.edgeCounts;  // { temporal, semantic, causal, entity }
 
 Exact duplicates (same normalized content) are always skipped. With
 `deduplicate: true`, near-duplicates are skipped too. `CONFLICT` and `UPDATE`
-suggestions are informational; nothing is replaced automatically.
+suggestions are informational; nothing is replaced automatically. Both the
+suggestion and causal edges come from heuristics unless you configure
+[judges](#judges).
 
 #### upsert
 
@@ -427,6 +432,48 @@ const provider: EmbeddingProvider = {
   },
 };
 ```
+
+## Judges
+
+Two parts of `remember` are heuristic by default. You can replace each with an
+async judge, for example a small evaluation model. Core has no model
+dependency; [`@mnemon/eve`](../eve#judges) ships Jev-backed judges.
+
+| Option | Replaces | Judge returns, per existing memory id |
+| --- | --- | --- |
+| `diffJudge` | Phrase lists and length ratios behind `suggestion` and `diff[].suggestion` | `"duplicate"` \| `"refines"` \| `"contradicts"` \| `"unrelated"` (`DIFF_RELATIONS`) |
+| `causalJudge` | Phrase lists and token overlap behind causal edges | `{ relation, weight }`, where `relation` is one of `CAUSAL_RELATIONS` and `weight` is in (0, 1] |
+
+```ts
+import { createMnemon, type CausalJudge, type DiffJudge } from "@mnemon/core";
+
+const diffJudge: DiffJudge = async ({ content, candidates }) => {
+  // candidates: similar existing memories, { id, content }[]
+  return { [candidates[0].id]: "contradicts" };
+};
+
+const causalJudge: CausalJudge = async ({ content, previous }) => {
+  // previous: up to 10 recent memories, { id, content }[]
+  return { [previous[0].id]: { relation: "existing_causes_new", weight: 0.8 } };
+};
+
+const mnemon = createMnemon({ databaseUrl, diffJudge, causalJudge });
+```
+
+- Relations map to suggestions as `duplicate` → `DUPLICATE`, `refines` →
+  `UPDATE`, `contradicts` → `CONFLICT`, `unrelated` → `ADD`. Any `CONFLICT`
+  still wins overall, then any `DUPLICATE`.
+- `existing_*_new` relations point the edge from the existing memory to the new
+  one; `new_*_existing` the other way. The verb (`causes`, `enables`,
+  `prevents`) becomes the edge's `sub_type`, and `created_by` is `"judge"`.
+  `none` and invalid entries create no edge.
+- Ids a judge omits keep the heuristic suggestion (diff) or get no edge
+  (causal).
+- Judges run outside the write transaction, only when there is something to
+  compare. The diff judge is skipped when a memory is skipped as a duplicate.
+- If a judge throws, the heuristic result is used and the write succeeds.
+- Content passed to a judge is user data. Judges must not follow instructions
+  inside it.
 
 ## Errors
 

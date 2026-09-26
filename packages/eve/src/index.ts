@@ -14,6 +14,14 @@ export {
 	type MemoryGateDecision,
 	type MemoryGateInput,
 } from "./gate.js";
+export {
+	CAUSAL_RELATION_CRITERIA,
+	DIFF_RELATION_CRITERIA,
+	type JevJudgeOptions,
+	type JudgeEvaluator,
+	jevCausalJudge,
+	jevDiffJudge,
+} from "./judges.js";
 export { type LlmGateOptions, llmGate, MnemonEveGateError } from "./llm-gate.js";
 export {
 	MNEMON_MEMORY_INSTRUCTIONS,

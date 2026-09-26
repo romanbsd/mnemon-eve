@@ -4,6 +4,24 @@ export const RECALL_INTENTS = ["WHY", "WHEN", "ENTITY", "GENERAL"] as const;
 export type RecallIntent = (typeof RECALL_INTENTS)[number];
 export type RememberAction = "added" | "skipped";
 export type DiffSuggestion = "ADD" | "DUPLICATE" | "CONFLICT" | "UPDATE";
+export const DIFF_RELATIONS = [
+	"duplicate",
+	"refines",
+	"contradicts",
+	"unrelated",
+] as const;
+export type DiffRelation = (typeof DIFF_RELATIONS)[number];
+/** How an earlier memory and a new one are causally related, if at all. */
+export const CAUSAL_RELATIONS = [
+	"existing_causes_new",
+	"existing_enables_new",
+	"existing_prevents_new",
+	"new_causes_existing",
+	"new_enables_existing",
+	"new_prevents_existing",
+	"none",
+] as const;
+export type CausalRelation = (typeof CAUSAL_RELATIONS)[number];
 export type AlgorithmVersion = "mnemon-ts-v1";
 
 export const INSIGHT_CATEGORIES = [

@@ -4,6 +4,8 @@ import { Pool } from "pg";
 import type { Clock } from "../../src/clock.js";
 import { quoteIdent } from "../../src/config.js";
 import type { EmbeddingProvider } from "../../src/embedding-provider.js";
+import type { DiffJudge } from "../../src/engine/diff.js";
+import type { CausalJudge } from "../../src/engine/edges.js";
 import { createMnemon } from "../../src/mnemon.js";
 import type {
 	Mnemon,
@@ -92,6 +94,8 @@ export async function withMnemon(
 		userId?: string | null;
 		clock?: Clock;
 		embeddingProvider?: EmbeddingProvider;
+		diffJudge?: DiffJudge;
+		causalJudge?: CausalJudge;
 		pool?: Pool;
 		enforceUserScope?: boolean;
 	},
@@ -106,6 +110,8 @@ export async function withMnemon(
 		schema,
 		clock: options.clock,
 		embeddingProvider: options.embeddingProvider,
+		diffJudge: options.diffJudge,
+		causalJudge: options.causalJudge,
 		enforceUserScope: options.enforceUserScope,
 	});
 	const scope = (auth?: Partial<MnemonAuthorization>) =>
