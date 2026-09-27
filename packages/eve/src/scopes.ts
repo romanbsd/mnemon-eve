@@ -8,7 +8,11 @@ export interface TenantScopeOptions {
 export interface TenantScopes {
 	/** `[tenantId]` for organization-shared memory, or `null` (slot disabled). */
 	byTenant: (context: MemoryScopeContext) => [string] | null;
-	/** `[tenantId, userId]` for private per-user memory, or `null`. */
+	/**
+	 * `[tenantId, userId]` for private per-user memory, or `null`. `userId` is
+	 * composed like Eve's `byPrincipal`, so the same principal id from two
+	 * authenticators or issuers stays apart.
+	 */
 	byTenantPrincipal: (context: MemoryScopeContext) => [string, string] | null;
 }
 
@@ -33,7 +37,13 @@ export function tenantScopes(options: TenantScopeOptions = {}): TenantScopes {
 		if (!isIdentifier(tenantId)) {
 			return null;
 		}
-		return { tenantId, userId: principal.principalId };
+		const userId = JSON.stringify([
+			principal.principalType,
+			principal.authenticator,
+			principal.issuer ?? null,
+			principal.principalId,
+		]);
+		return isIdentifier(userId) ? { tenantId, userId } : null;
 	};
 	return {
 		byTenant(context) {

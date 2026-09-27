@@ -401,7 +401,7 @@ describe.skipIf(!available)("mnemonMemory", () => {
 	});
 
 	it("rejects invalid limits", () => {
-		for (const bad of [{ recallLimit: 0 }, { recallCharBudget: -1 }, { relatedLimit: 1.5 }]) {
+		for (const bad of [{ recallLimit: 0 }, { recallLimit: 101 }, { recallCharBudget: -1 }, { relatedLimit: 1.5 }, { relatedLimit: 101 }]) {
 			expect(() =>
 				mnemonMemory({ client: {} as MnemonClient, audience: "organization", gate: jevGate({ evaluate: fakeEvaluate }), ...bad }),
 			).toThrow(RangeError);

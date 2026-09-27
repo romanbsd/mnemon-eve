@@ -4,7 +4,7 @@ import { quoteIdent } from "../config.js";
 import { MnemonConfigurationError, MnemonDatabaseError } from "../errors.js";
 import { withTransaction, wrapDatabaseError } from "./transaction.js";
 
-export const MIGRATION_VERSION = 2;
+export const MIGRATION_VERSION = 3;
 
 // Rows inherit authorization from the transaction-local settings written by
 // Mnemon.withAuthorization(); inserts without that context fail.
@@ -71,8 +71,9 @@ export async function runMigrations(
 		if (currentVersion === MIGRATION_VERSION) {
 			return MIGRATION_VERSION;
 		}
-		if (currentVersion === 1) {
-			await upgradeToV2(client, s);
+		if (currentVersion === 1 || currentVersion === 2) {
+			if (currentVersion === 1) await upgradeToV2(client, s);
+			await upgradeToV3(client, s);
 			return MIGRATION_VERSION;
 		}
 		if (currentVersion !== undefined) {
@@ -237,6 +238,7 @@ export async function runMigrations(
 
 		await client.query(`INSERT INTO ${s}.schema_migrations (version) VALUES (1)`);
 		await upgradeToV2(client, s);
+		await upgradeToV3(client, s);
 		return MIGRATION_VERSION;
 	}).catch((error: unknown) => {
 		if (error instanceof MnemonConfigurationError) {
@@ -272,6 +274,22 @@ async function upgradeToV2(client: PoolClient, s: string): Promise<void> {
     `);
 	await client.query(
 		`INSERT INTO ${s}.schema_migrations (version) VALUES (2)`,
+	);
+}
+
+/**
+ * v3: exact-duplicate uniqueness is per user, so two users can each store the
+ * same fact in a shared namespace; tenant-shared rows (no user) share one slot.
+ */
+async function upgradeToV3(client: PoolClient, s: string): Promise<void> {
+	await client.query(`DROP INDEX IF EXISTS ${s}.insights_active_content_hash_uq`);
+	await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS insights_active_user_content_hash_uq
+          ON ${s}.insights (tenant_id, namespace, coalesce(user_id, ''), content_hash)
+          WHERE deleted_at IS NULL AND managed = false
+    `);
+	await client.query(
+		`INSERT INTO ${s}.schema_migrations (version) VALUES (3)`,
 	);
 }
 

@@ -23,7 +23,14 @@ const user = (attributes: Record<string, unknown>, extra = {}) =>
 describe("scope resolvers", () => {
 	it("derive tenant and tenant+user scopes from session auth", () => {
 		expect(byTenant(user({ tenantId: "t1" }))).toEqual(["t1"]);
-		expect(byTenantPrincipal(user({ tenantId: "t1" }))).toEqual(["t1", "user-1"]);
+		expect(byTenantPrincipal(user({ tenantId: "t1" }))).toEqual([
+			"t1",
+			'["user","test",null,"user-1"]',
+		]);
+		// Same principal id from another authenticator or issuer is someone else.
+		const ids = [user({ tenantId: "t1" }, { authenticator: "other" }), user({ tenantId: "t1" }, { issuer: "https://idp" })]
+			.map((c) => byTenantPrincipal(c)?.[1]);
+		expect(new Set([...ids, '["user","test",null,"user-1"]']).size).toBe(3);
 	});
 
 	it("fail closed without an authenticated user and a single tenant", () => {

@@ -278,9 +278,11 @@ export class PostgresMnemonStore implements MnemonStore {
 	}
 
 	async findExactDuplicate(contentHash: string): Promise<InsightRecord | null> {
-		return this.queryInsight("content_hash = $2 AND managed = false", [
-			contentHash,
-		]);
+		// Matches insights_active_user_content_hash_uq: only this caller's rows.
+		return this.queryInsight(
+			"content_hash = $2 AND managed = false AND coalesce(user_id, '') = current_setting('mnemon.user_id', true)",
+			[contentHash],
+		);
 	}
 
 	private async queryInsights(

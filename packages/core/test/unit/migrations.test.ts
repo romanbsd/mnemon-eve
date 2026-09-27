@@ -55,7 +55,7 @@ describe("assertPgvectorVersion", () => {
 		const pool = fakePool([
 			[/pg_roles/, () => Promise.resolve({ rows: [{ bypass: false }] })],
 			[/to_regclass/, () => Promise.resolve({ rows: [{ found: true }] })],
-			[/max\(version\)/, () => Promise.resolve({ rows: [{ version: 2 }] })],
+			[/max\(version\)/, () => Promise.resolve({ rows: [{ version: 3 }] })],
 			[/pg_extension/, () => Promise.resolve({ rows: [{ version: "0.7.4" }] })],
 		]);
 		const client = createMnemon({

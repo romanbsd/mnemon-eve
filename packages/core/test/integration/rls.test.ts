@@ -63,6 +63,23 @@ describe.skipIf(!available)("row-level security", () => {
 		);
 	});
 
+	it("lets each user and the tenant store the same fact in one namespace", async () => {
+		await withMnemon(
+			{ clock, namespace, tenantId: "tenant-a", userId: "user-1", enforceUserScope: true },
+			async (u1, { scope }) => {
+				const fact = { content: "Prefers metric units", deduplicate: true };
+				const ids = new Set<string>();
+				for (const m of [u1, scope({ userId: "user-2" }), scope({ userId: null })]) {
+					const saved = await m.remember(fact);
+					expect(saved.action).toBe("added");
+					ids.add(saved.insight.id);
+					expect((await m.remember(fact)).action).toBe("skipped");
+				}
+				expect(ids.size).toBe(3);
+			},
+		);
+	});
+
 	it("does not enforce user separation with enforceUserScope off", async () => {
 		await withMnemon(
 			{ clock, namespace, tenantId: "tenant-a", userId: "user-1", enforceUserScope: false },
@@ -219,9 +236,9 @@ describe.skipIf(!available)("row-level security", () => {
 			// Roll back to the 0.1.0 shape.
 			await admin.query(`ALTER TABLE ${s}.edges DROP COLUMN derived`);
 			await admin.query(`DROP INDEX ${s}.insights_entities_lower_gin_idx`);
-			await admin.query(`DELETE FROM ${s}.schema_migrations WHERE version = 2`);
+			await admin.query(`DELETE FROM ${s}.schema_migrations WHERE version >= 2`);
 
-			expect(await runMigrations(admin, schema)).toBe(2);
+			expect(await runMigrations(admin, schema)).toBe(3);
 			const found = await admin.query(
 				`SELECT to_regclass($1) IS NOT NULL AS index,
 				        EXISTS (SELECT 1 FROM information_schema.columns
@@ -265,11 +282,11 @@ describe.skipIf(!available)("row-level security", () => {
 		const s = quoteIdent(schema);
 		const race = () => Promise.all([1, 2, 3].map(() => runMigrations(admin, schema)));
 		try {
-			expect(await race()).toEqual([2, 2, 2]);
+			expect(await race()).toEqual([3, 3, 3]);
 			await admin.query(`ALTER TABLE ${s}.edges DROP COLUMN derived`);
 			await admin.query(`DROP INDEX ${s}.insights_entities_lower_gin_idx`);
-			await admin.query(`DELETE FROM ${s}.schema_migrations WHERE version = 2`);
-			expect(await race()).toEqual([2, 2, 2]);
+			await admin.query(`DELETE FROM ${s}.schema_migrations WHERE version >= 2`);
+			expect(await race()).toEqual([3, 3, 3]);
 		} finally {
 			await admin.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`).catch(() => {});
 			await admin.end();
