@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run check-types
+      - run: npm run build
+      - run: npm test
+
+  publish:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: "@romanbsd"
+      - run: npm ci
+      - name: Check tag matches package versions
+        run: |
+          for pkg in core eve; do
+            version=$(node -p "require('./packages/$pkg/package.json').version")
+            if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+              echo "packages/$pkg is $version but the tag is $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+          done
+      # prepack builds dist/; core first so eve's dependency resolves.
+      - run: npm publish -w @romanbsd/mnemon-core
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm publish -w @romanbsd/mnemon-eve
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

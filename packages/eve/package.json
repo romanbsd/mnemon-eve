@@ -3,6 +3,11 @@
 	"version": "0.1.0",
 	"description": "Eve memory provider backed by Mnemon: organization and per-user memory with PostgreSQL RLS and a Jev write gate.",
 	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/romanbsd/mnemon-eve.git",
+		"directory": "packages/eve"
+	},
 	"type": "module",
 	"exports": {
 		".": {
@@ -43,12 +48,12 @@
 		"multi-tenant",
 		"rls"
 	],
-	"publishConfig": {
-		"access": "public"
-	},
 	"devDependencies": {
 		"ai": "^7.0.116",
 		"eve": "^0.67.0",
 		"zod": "^4.6.5"
+	},
+	"publishConfig": {
+		"registry": "https://npm.pkg.github.com"
 	}
 }

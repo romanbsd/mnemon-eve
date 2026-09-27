@@ -3,6 +3,11 @@
 	"version": "0.1.0",
 	"description": "TypeScript Mnemon memory engine on PostgreSQL + pgvector with tenant row-level security.",
 	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/romanbsd/mnemon-eve.git",
+		"directory": "packages/core"
+	},
 	"type": "module",
 	"exports": {
 		".": {
@@ -42,6 +47,6 @@
 		"rls"
 	],
 	"publishConfig": {
-		"access": "public"
+		"registry": "https://npm.pkg.github.com"
 	}
 }
