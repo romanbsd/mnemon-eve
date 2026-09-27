@@ -1,5 +1,5 @@
 {
-	"name": "@mnemon/core",
+	"name": "@romanbsd/mnemon-core",
 	"version": "0.1.0",
 	"description": "TypeScript Mnemon memory engine on PostgreSQL + pgvector with tenant row-level security.",
 	"license": "Apache-2.0",

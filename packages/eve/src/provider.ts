@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { MnemonAuthorization, MnemonClient, RecallHit } from "@mnemon/core";
+import type { MnemonAuthorization, MnemonClient, RecallHit } from "@romanbsd/mnemon-core";
 import {
 	defineMemoryProvider,
 	type MemoryScope,

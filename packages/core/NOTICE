@@ -4,6 +4,6 @@ Copyright 2026 Roman Shterenzon
 This product includes software derived from Mnemon
 (https://github.com/mnemon-dev/mnemon), Copyright 2026 Grivn and Mnemon
 contributors, licensed under the Apache License, Version 2.0.
-The retrieval, graph, and deduplication algorithms in @mnemon/core are a
+The retrieval, graph, and deduplication algorithms in @romanbsd/mnemon-core are a
 TypeScript port of that project, adapted for PostgreSQL, pgvector, and
 row-level security.

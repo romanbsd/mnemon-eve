@@ -1,4 +1,4 @@
-import { INSIGHT_CATEGORIES } from "@mnemon/core";
+import { INSIGHT_CATEGORIES } from "@romanbsd/mnemon-core";
 
 import {
 	CATEGORY_QUESTION,

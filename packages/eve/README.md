@@ -1,7 +1,7 @@
-# @mnemon/eve
+# @romanbsd/mnemon-eve
 
 Long-term memory for [Eve](https://github.com/vercel/eve) agents, backed by
-[`@mnemon/core`](../core) on PostgreSQL. It gives an agent two memory slots:
+[`@romanbsd/mnemon-core`](../core) on PostgreSQL. It gives an agent two memory slots:
 
 - **organization**: shared durable knowledge for the caller's tenant.
 - **personal**: private memory for one user *within* that tenant.
@@ -34,12 +34,12 @@ namespace, and PostgreSQL row-level security enforces the tenant boundary.
 ## Install
 
 ```sh
-npm install @mnemon/eve @mnemon/core eve zod
+npm install @romanbsd/mnemon-eve @romanbsd/mnemon-core eve zod
 ```
 
 - `eve` `>=0.66.1 <0.68.0`, `zod` 4, Node.js 24+
 - PostgreSQL with pgvector, and a non-superuser, `NOBYPASSRLS` role. See
-  [`@mnemon/core` → Database roles](../core#database-roles).
+  [`@romanbsd/mnemon-core` → Database roles](../core#database-roles).
 
 ## Quick start
 
@@ -62,7 +62,7 @@ MNEMON_DATABASE_URL=postgres://agent_app:change-me@localhost/mydb
 Create one client per process. Tables are created on first use.
 
 ```ts title="agent/lib/mnemon.ts"
-import { createMnemon, OllamaEmbeddingProvider } from "@mnemon/core";
+import { createMnemon, OllamaEmbeddingProvider } from "@romanbsd/mnemon-core";
 
 export const mnemon = createMnemon({
   databaseUrl: process.env.MNEMON_DATABASE_URL,
@@ -74,7 +74,7 @@ export const mnemon = createMnemon({
 To use OpenAI embeddings instead:
 
 ```ts title="agent/lib/mnemon.ts"
-import { createMnemon, OpenAIEmbeddingProvider } from "@mnemon/core";
+import { createMnemon, OpenAIEmbeddingProvider } from "@romanbsd/mnemon-core";
 
 export const mnemon = createMnemon({
   databaseUrl: process.env.MNEMON_DATABASE_URL,
@@ -88,13 +88,13 @@ export const mnemon = createMnemon({
 
 The schema records the embedding model on first use, so pick one before you
 store real memories. See
-[`@mnemon/core` → Embeddings](../core#embeddings) for OpenAI-compatible
+[`@romanbsd/mnemon-core` → Embeddings](../core#embeddings) for OpenAI-compatible
 endpoints and environment variables.
 
 ### 3. Memory slots
 
 ```ts title="agent/memory/organization.ts"
-import { byTenant, mnemonMemory } from "@mnemon/eve";
+import { byTenant, mnemonMemory } from "@romanbsd/mnemon-eve";
 import { defineMemory } from "eve/memory";
 import { mnemon } from "../lib/mnemon";
 
@@ -106,7 +106,7 @@ export default defineMemory({
 ```
 
 ```ts title="agent/memory/personal.ts"
-import { byTenantPrincipal, mnemonMemory } from "@mnemon/eve";
+import { byTenantPrincipal, mnemonMemory } from "@romanbsd/mnemon-eve";
 import { defineMemory } from "eve/memory";
 import { mnemon } from "../lib/mnemon";
 
@@ -135,7 +135,7 @@ You can use just one slot. For example, a single-user product may only need
 Tell the model when to propose memories:
 
 ```ts title="agent/instructions.ts"
-import { MNEMON_MEMORY_INSTRUCTIONS } from "@mnemon/eve";
+import { MNEMON_MEMORY_INSTRUCTIONS } from "@romanbsd/mnemon-eve";
 import { defineInstructions } from "eve/instructions";
 
 export default defineInstructions({ content: MNEMON_MEMORY_INSTRUCTIONS });
@@ -215,7 +215,7 @@ that turn with no recall and no tool, unless:
 If your tenant attribute has another name:
 
 ```ts title="agent/lib/scopes.ts"
-import { tenantScopes } from "@mnemon/eve";
+import { tenantScopes } from "@romanbsd/mnemon-eve";
 
 export const { byTenant, byTenantPrincipal } = tenantScopes({ tenantAttribute: "orgId" });
 ```
@@ -227,7 +227,7 @@ are disabled locally by default. To try memory locally, wrap the resolver and
 map the local principal to a fixed development tenant:
 
 ```ts title="agent/lib/scopes.ts"
-import { byTenant, byTenantPrincipal } from "@mnemon/eve";
+import { byTenant, byTenantPrincipal } from "@romanbsd/mnemon-eve";
 import type { MemoryScopeContext } from "eve/memory";
 
 const isLocalDev = (ctx: MemoryScopeContext) =>
@@ -274,10 +274,10 @@ in `defineMemory`, Eve derives that from the app's folder (local) or the
 Vercel project, environment, and preview branch, plus the node and slot names.
 Any change there gives a new key, and memories stored under the old one are no
 longer recalled. They stay in the database; to reach them, pass the old key as
-the namespace to `@mnemon/core` (it is the `namespace` of their rows).
+the namespace to `@romanbsd/mnemon-core` (it is the `namespace` of their rows).
 
 A fixed namespace also lets jobs outside Eve, such as `importDraft`,
-`retentionCandidates`, or `memoryReceipt` from `@mnemon/core`, address the same
+`retentionCandidates`, or `memoryReceipt` from `@romanbsd/mnemon-core`, address the same
 memories: scope the client with the same tenant, user, and namespace.
 
 ### Recall
@@ -305,7 +305,7 @@ standing preferences in view, but a query like "what's the weather in Paris?"
 still gets unrelated memories injected. To drop those, add a recall filter:
 
 ```ts
-import { jevRecallFilter, mnemonMemory } from "@mnemon/eve";
+import { jevRecallFilter, mnemonMemory } from "@romanbsd/mnemon-eve";
 
 mnemonMemory({
   client: mnemon,
@@ -462,7 +462,7 @@ The variable is read once, when `mnemonMemory()` is called. `gate` always wins.
 Local rules only: no model call, no network, no cost.
 
 ```ts
-import { heuristicGate } from "@mnemon/eve";
+import { heuristicGate } from "@romanbsd/mnemon-eve";
 
 mnemonMemory({ client: mnemon, audience: "personal", gate: heuristicGate() });
 ```
@@ -506,7 +506,7 @@ authentication (`/login` in `eve dev`, or `AI_GATEWAY_API_KEY`). The same
 default applies to `jevRecallFilter`, `jevDiffJudge`, and `jevCausalJudge`.
 
 ```ts
-import { jevGate } from "@mnemon/eve";
+import { jevGate } from "@romanbsd/mnemon-eve";
 
 jevGate();                                  // typesafeModel(), threshold 0.5
 jevGate({ threshold: 0.7 });                // stricter: a flag counts as true at p ≥ 0.7
@@ -531,7 +531,7 @@ JSON schema response: the five flags as booleans, plus `category`,
 `importance` (1–5), and `supersedes` (indexes into `relatedMemories`).
 
 ```ts
-import { llmGate } from "@mnemon/eve";
+import { llmGate } from "@romanbsd/mnemon-eve";
 
 llmGate(); // OpenAI, gpt-5-mini, key from OPENAI_API_KEY
 
@@ -568,7 +568,7 @@ llmGate({
 Write any policy, or wrap a built-in gate:
 
 ```ts
-import { jevGate, llmGate, type MemoryGate } from "@mnemon/eve";
+import { jevGate, llmGate, type MemoryGate } from "@romanbsd/mnemon-eve";
 
 // Accept everything the pre-filter lets through (e.g. trusted internal agents).
 const acceptAll: MemoryGate = async () => ({ accept: true, reasons: [] });
@@ -610,7 +610,7 @@ For a gate backed by another model, reuse `gateState(input)` (the JSON state),
 
 ## Judges
 
-`@mnemon/core` can replace two `remember` heuristics with judges (see
+`@romanbsd/mnemon-core` can replace two `remember` heuristics with judges (see
 [core Judges](../core#judges)). This package ships Jev-backed ones. Each asks
 one choice per existing memory, all in a single `evaluate` request:
 
@@ -620,8 +620,8 @@ one choice per existing memory, all in a single `evaluate` request:
 | `jevCausalJudge()` | `causalJudge` | Is there a causal link to each recent memory, which direction, and is it causes, enables, or prevents? Edge weight is the chosen relation's probability. |
 
 ```ts
-import { createMnemon } from "@mnemon/core";
-import { jevCausalJudge, jevDiffJudge } from "@mnemon/eve";
+import { createMnemon } from "@romanbsd/mnemon-core";
+import { jevCausalJudge, jevDiffJudge } from "@romanbsd/mnemon-eve";
 
 const mnemon = createMnemon({
   databaseUrl,
@@ -695,7 +695,7 @@ instructions before adding automatic capture.
 Inject a deterministic gate so tests need no model credentials:
 
 ```ts
-import { jevGate, mnemonMemory, type MemoryEvaluator, type MemoryGate } from "@mnemon/eve";
+import { jevGate, mnemonMemory, type MemoryEvaluator, type MemoryGate } from "@romanbsd/mnemon-eve";
 
 // Simplest: a custom gate.
 const testGate: MemoryGate = async ({ fact }) =>

@@ -2,9 +2,9 @@
 
 Monorepo for:
 
-- [`@mnemon/core`](packages/core): a TypeScript [Mnemon](https://github.com/mnemon-dev/mnemon)
+- [`@romanbsd/mnemon-core`](packages/core): a TypeScript [Mnemon](https://github.com/mnemon-dev/mnemon)
   memory engine on PostgreSQL + pgvector with tenant row-level security.
-- [`@mnemon/eve`](packages/eve): an [Eve](https://github.com/vercel/eve) memory provider
+- [`@romanbsd/mnemon-eve`](packages/eve): an [Eve](https://github.com/vercel/eve) memory provider
   with organization and per-user slots, a pluggable write gate (Jev when
   `TYPESAFE_API_KEY` is set, local heuristics otherwise, or any OpenAI-compatible LLM) that also sets category and importance, and optional
   Jev judges for Mnemon's duplicate/conflict suggestions and causal edges.
@@ -30,8 +30,8 @@ runs the same suite with V8 coverage; the HTML report goes to `coverage/`.
 
 ```sh
 npm run build
-npm publish -w @mnemon/core
-npm publish -w @mnemon/eve
+npm publish -w @romanbsd/mnemon-core
+npm publish -w @romanbsd/mnemon-eve
 ```
 
 ## License

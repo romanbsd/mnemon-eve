@@ -1,4 +1,4 @@
-import { INSIGHT_CATEGORIES, type InsightCategory } from "@mnemon/core";
+import { INSIGHT_CATEGORIES, type InsightCategory } from "@romanbsd/mnemon-core";
 
 import { jevEvaluator, type JevEvaluator, type JevModel } from "./jev.js";
 

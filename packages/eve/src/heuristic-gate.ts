@@ -1,4 +1,4 @@
-import type { InsightCategory } from "@mnemon/core";
+import type { InsightCategory } from "@romanbsd/mnemon-core";
 
 import { decide, type MemoryGate, type MemoryGateDecision } from "./gate.js";
 

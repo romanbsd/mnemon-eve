@@ -1,4 +1,4 @@
-import type { MnemonClient } from "@mnemon/core";
+import type { MnemonClient } from "@romanbsd/mnemon-core";
 import { describe, expect, it } from "vitest";
 
 import { postgresAvailable, withMnemon } from "../../../core/test/integration/helpers.js";

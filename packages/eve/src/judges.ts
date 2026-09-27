@@ -5,7 +5,7 @@ import {
 	DIFF_RELATIONS,
 	type DiffJudge,
 	type DiffRelation,
-} from "@mnemon/core";
+} from "@romanbsd/mnemon-core";
 
 import { jevEvaluator, type JevEvaluator, type JevModel } from "./jev.js";
 

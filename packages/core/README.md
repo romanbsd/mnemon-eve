@@ -1,4 +1,4 @@
-# @mnemon/core
+# @romanbsd/mnemon-core
 
 In-process [Mnemon](https://github.com/mnemon-dev/mnemon) memory engine for
 TypeScript, on PostgreSQL + pgvector, with tenant isolation enforced by
@@ -12,7 +12,7 @@ PostgreSQL row-level security (RLS).
   by PostgreSQL. Per-user enforcement is optional.
 - **Idempotency**: `once(key, fn)` gives exactly-once writes under replay.
 
-Using [Eve](https://github.com/vercel/eve)? See [`@mnemon/eve`](../eve).
+Using [Eve](https://github.com/vercel/eve)? See [`@romanbsd/mnemon-eve`](../eve).
 
 ## Contents
 
@@ -37,7 +37,7 @@ Using [Eve](https://github.com/vercel/eve)? See [`@mnemon/eve`](../eve).
   `BYPASSRLS` (see [Database roles](#database-roles))
 
 ```sh
-npm install @mnemon/core
+npm install @romanbsd/mnemon-core
 ```
 
 ## Quick start
@@ -50,7 +50,7 @@ GRANT CREATE ON DATABASE mydb TO app;
 ```
 
 ```ts
-import { createMnemon } from "@mnemon/core";
+import { createMnemon } from "@romanbsd/mnemon-core";
 
 const client = createMnemon({ databaseUrl: "postgres://app:change-me@localhost/mydb" });
 await client.initialize(); // optional: runs lazily on first use
@@ -262,7 +262,7 @@ validated before anything is written. Each insight then goes through
 insights by their index in the draft.
 
 ```ts
-import { importDraft, memoryReceipt } from "@mnemon/core";
+import { importDraft, memoryReceipt } from "@romanbsd/mnemon-core";
 
 const draft = {
   schema_version: "1",
@@ -428,7 +428,7 @@ import {
   LlamaCppEmbeddingProvider,
   OllamaEmbeddingProvider,
   OpenAIEmbeddingProvider,
-} from "@mnemon/core";
+} from "@romanbsd/mnemon-core";
 
 // Ollama: `ollama pull nomic-embed-text`
 new OllamaEmbeddingProvider(); // http://127.0.0.1:11434, nomic-embed-text, 768 dims
@@ -457,7 +457,7 @@ Always set `model` for OpenAI; the shared default is a local model name.
 ### OpenAI
 
 ```ts
-import { createMnemon, OpenAIEmbeddingProvider } from "@mnemon/core";
+import { createMnemon, OpenAIEmbeddingProvider } from "@romanbsd/mnemon-core";
 
 export const mnemon = createMnemon({
   databaseUrl: process.env.MNEMON_DATABASE_URL,
@@ -509,7 +509,7 @@ memory content must stay on your infrastructure, use a local provider.
 A custom provider implements one method:
 
 ```ts
-import type { EmbeddingProvider } from "@mnemon/core";
+import type { EmbeddingProvider } from "@romanbsd/mnemon-core";
 
 const provider: EmbeddingProvider = {
   model: "my-model",
@@ -524,7 +524,7 @@ const provider: EmbeddingProvider = {
 
 Two parts of `remember` are heuristic by default. You can replace each with an
 async judge, for example a small evaluation model. Core has no model
-dependency; [`@mnemon/eve`](../eve#judges) ships Jev-backed judges.
+dependency; [`@romanbsd/mnemon-eve`](../eve#judges) ships Jev-backed judges.
 
 | Option | Replaces | Judge returns, per existing memory id |
 | --- | --- | --- |
@@ -532,7 +532,7 @@ dependency; [`@mnemon/eve`](../eve#judges) ships Jev-backed judges.
 | `causalJudge` | Phrase lists and token overlap behind causal edges | `{ relation, weight }`, where `relation` is one of `CAUSAL_RELATIONS` and `weight` is in (0, 1] |
 
 ```ts
-import { createMnemon, type CausalJudge, type DiffJudge } from "@mnemon/core";
+import { createMnemon, type CausalJudge, type DiffJudge } from "@romanbsd/mnemon-core";
 
 const diffJudge: DiffJudge = async ({ content, candidates }) => {
   // candidates: similar existing memories, { id, content }[]
