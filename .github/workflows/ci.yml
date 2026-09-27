@@ -31,9 +31,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # eve resolves @romanbsd/mnemon-core through its dist/ types.
+      - run: npm run build
       - run: npm run lint
       - run: npm run check-types
-      - run: npm run build
       - run: npm test
 
   publish:
