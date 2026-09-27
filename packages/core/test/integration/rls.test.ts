@@ -63,9 +63,9 @@ describe.skipIf(!available)("row-level security", () => {
 		);
 	});
 
-	it("does not enforce user separation unless enforceUserScope is on", async () => {
+	it("does not enforce user separation with enforceUserScope off", async () => {
 		await withMnemon(
-			{ clock, namespace, tenantId: "tenant-a", userId: "user-1" },
+			{ clock, namespace, tenantId: "tenant-a", userId: "user-1", enforceUserScope: false },
 			async (u1, { scope }) => {
 				const saved = await u1.remember({ content: "Prefers terse answers" });
 				expect(await scope({ userId: "user-2" }).get(saved.insight.id)).not.toBeNull();

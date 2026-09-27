@@ -92,7 +92,7 @@ indexes, and RLS policies.
 | `embeddingDimensions` | provider's | Must match the provider if both are set. |
 | `diffJudge` | none | Replaces the heuristic `remember` suggestion. See [Judges](#judges). |
 | `causalJudge` | none | Replaces the heuristic causal edges. See [Judges](#judges). |
-| `enforceUserScope` | `false` | Installs the per-user RLS policy. See [Per-user isolation](#per-user-isolation-opt-in). |
+| `enforceUserScope` | `true` | Installs the per-user RLS policy. See [Per-user isolation](#per-user-isolation). |
 | `allowRlsBypass` | `false` | Allows superuser or `BYPASSRLS` roles, e.g. for a migration step. |
 | `defaults.category` | `"general"` | Default category for `remember`. |
 | `defaults.importance` | `3` | Default importance, 1–5. |
@@ -115,8 +115,8 @@ interface MnemonClient {
 
 interface MnemonAuthorization {
   tenantId: string;        // enforced by RLS
-  userId?: string | null;  // stored; enforced only with enforceUserScope
-  namespace: string;       // logical partition inside the tenant, 1–200 chars
+  userId?: string | null;  // enforced by RLS unless enforceUserScope is false
+  namespace: string;       // the application, 1–200 chars; not a security boundary
 }
 ```
 
@@ -318,8 +318,11 @@ runs it again.
 
 Isolation has two layers:
 
-- **`namespace`** is a logical partition applied inside every query. It is
-  not a security boundary.
+- **`namespace`** names the application. Several applications can share one
+  database, and the same `tenantId` can appear in more than one of them. It
+  is applied inside every query, but it is not a security boundary: any
+  client of the tenant can read another application's memories by scoping to
+  its namespace.
 - **`tenantId`** is enforced by PostgreSQL:
   - The tables `insights`, `edges`, `oplog`, and `operations` carry
     `tenant_id` and use `ENABLE` + `FORCE ROW LEVEL SECURITY` with a
@@ -334,25 +337,31 @@ tenants can use the same namespace, the same UUIDs, and the same content
 without colliding or learning that the other exists. Vector search runs on
 rows already filtered by RLS, so neighbours never cross tenants.
 
-### Per-user isolation (opt-in)
+### Per-user isolation
 
-`userId` is stored on every row. By default RLS does **not** separate users
-within a tenant; the namespace does that. Pass `enforceUserScope: true` to
-also install a restrictive `mnemon_user` policy:
+`userId` is stored on every row. By default (`enforceUserScope: true`)
+`initialize()` installs a restrictive `mnemon_user` policy:
 
 - a row is visible only when its `user_id` equals the current `userId`;
 - rows written without a `userId` are visible only to callers without one.
 
+So tenant-wide memory is written and read without a `userId`, and personal
+memory with one. A job without a `userId`, such as retention, sees only
+tenant-wide rows; run it once per user for personal memory.
+
+Unique keys include the tenant and namespace but not the user. Two users
+writing the same content or `once` key into one namespace collide: the policy
+hides the other user's row, and the insert fails with a unique violation
+(`23505`). Give each user their own namespace when that matters:
+
 ```ts
-const client = createMnemon({ databaseUrl, enforceUserScope: true });
-const alice = client.scope({ tenantId: "acme", userId: "alice", namespace: "user:alice" });
+const alice = client.scope({ tenantId: "acme", userId: "alice", namespace: "support-bot:alice" });
 ```
 
-With the user policy on, give each user their own namespace. Keys include the
-tenant but not the user, so two users writing the same content, UUID, or
-`once` key into one shared namespace would collide.
-
-The policy is never dropped automatically. To turn it off:
+With `enforceUserScope: false` no policy is installed and users of a tenant
+see each other's rows in a shared namespace. That only takes effect on a
+schema that never had the policy: once installed, it applies to every client
+of that schema and is never dropped automatically. To turn it off:
 
 ```sql
 DROP POLICY mnemon_user ON mnemon.insights;

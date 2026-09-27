@@ -35,8 +35,8 @@ export interface MnemonConfig {
 		maxRecallCandidates?: number;
 	};
 	/**
-	 * Opt in to a restrictive RLS policy that also isolates rows by `userId`.
-	 * Once installed it is never dropped automatically; see README.
+	 * Installs a restrictive RLS policy that also isolates rows by `userId`.
+	 * Default true. Once installed it is never dropped automatically; see README.
 	 */
 	enforceUserScope?: boolean;
 	/**
@@ -141,7 +141,7 @@ export function resolveConfig(config: MnemonConfig): ResolvedConfig {
 		limits: {
 			maxRecallCandidates,
 		},
-		enforceUserScope: config.enforceUserScope ?? false,
+		enforceUserScope: config.enforceUserScope ?? true,
 		allowRlsBypass: config.allowRlsBypass ?? false,
 	};
 }

@@ -22,7 +22,7 @@ describe("resolveConfig", () => {
 
 	it("fills user scope and RLS bypass defaults", () => {
 		const cfg = resolveConfig({ databaseUrl: "postgres://x" });
-		expect(cfg.enforceUserScope).toBe(false);
+		expect(cfg.enforceUserScope).toBe(true);
 		expect(cfg.allowRlsBypass).toBe(false);
 	});
 
