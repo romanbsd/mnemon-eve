@@ -405,6 +405,31 @@ and both return it.
 There is deliberately no automatic `turn.completed` capture: the model
 proposes, and the gate provides precision.
 
+### forget_memory
+
+Off by default. With `forget` set, recall shows each memory's id and Eve
+exposes `<slot>__forget_memory({ id })`, which forgets one memory in the
+slot's own partition and returns `{ forgotten }`. Replays of a call return
+the first result.
+
+Recalled memories are untrusted and can steer the model toward deleting
+others, so `forget: true` asks the user before every call (`always()` from
+`eve/tools/approval`). On an organization slot any user of the tenant could
+forget shared memory; pass a policy that checks the caller:
+
+```ts
+mnemonMemory({
+  client: mnemon,
+  audience: "organization",
+  forget: {
+    approval: (ctx) =>
+      ctx.session.auth.current?.attributes.role === "admin"
+        ? "user-approval"
+        : { type: "denied", reason: "Only admins can forget organization memory." },
+  },
+});
+```
+
 ## Options
 
 ```ts
@@ -417,6 +442,7 @@ mnemonMemory({
   recallFilter: undefined, // drops unhelpful recalled memories; see Recall filter
   gate: undefined,         // decides what is stored; default depends on TYPESAFE_API_KEY, see Gates
   namespace: "org-memory", // fixed Mnemon namespace; default Eve's scope.key, see Namespaces
+  forget: false,           // true or { approval } adds forget_memory; see forget_memory
   onEvent: (event) => {},  // metadata-only metrics; see Observability
 });
 ```
@@ -690,7 +716,7 @@ mnemonMemory({
     if (event.type === "recall") {
       metrics.histogram("memory.recall.ms", event.latencyMs, { slot: event.slot });
       metrics.histogram("memory.recall.count", event.count, { slot: event.slot });
-    } else {
+    } else if (event.type === "proposal") {
       metrics.increment("memory.proposal", { slot: event.slot, status: event.status });
       if (event.gateMs) metrics.histogram("memory.gate.ms", event.gateMs);
     }
@@ -702,6 +728,7 @@ mnemonMemory({
 | --- | --- |
 | `recall` | `slot`, `audience`, `operationId`, `partition`, `count`, `candidates?` (shown to the filter), `filterFailed?`, `latencyMs`, `replayed` |
 | `proposal` | `slot`, `audience`, `callId`, `partition`, `status` (a `ProposalStatus` or `error`), `reasons`, `superseded` (count), `gateMs?`, `writeMs?`, `latencyMs`, `replayed` |
+| `forget` | `slot`, `audience`, `callId`, `partition`, `status` (`forgotten`, `missing`, or `error`), `latencyMs`, `replayed` |
 
 Exceptions thrown inside `onEvent` are swallowed. Track proposal rate and
 acceptance rate. If useful facts are rarely proposed, strengthen the
@@ -727,6 +754,8 @@ instructions before adding automatic capture.
    the rest.
 9. Replay cannot duplicate writes or change a recall.
 10. Metrics never carry memory text or auth attributes.
+11. `forget_memory` is opt-in, reaches only the slot's partition, and asks
+    the user by default.
 
 ## Testing your agent
 

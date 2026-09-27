@@ -40,12 +40,14 @@ function slot(
 	events: MnemonEveEvent[] = [],
 	evaluate: MemoryEvaluator = fakeEvaluate,
 	recallFilter?: RecallFilter,
+	enableForget?: boolean,
 ) {
 	const provider = mnemonMemory({
 		client,
 		audience,
 		gate: jevGate({ evaluate }),
 		recallFilter,
+		forget: enableForget,
 		onEvent: (e) => events.push(e),
 	});
 	const memory = {
@@ -69,7 +71,19 @@ function slot(
 		};
 		return tool.execute({ fact }, { callId, abortSignal: new AbortController().signal });
 	};
-	return { turn, propose };
+	const tools = () =>
+		provider.tools({
+			memory,
+			turn: { id: "t", sequence: 1, input: [{ role: "user", content: "forget that" }] },
+		} as never) as Promise<Record<string, unknown>>;
+	const forget = async (id: string, callId: string = crypto.randomUUID()) => {
+		const tool = (await tools()).forget_memory as {
+			approval: unknown;
+			execute(input: { id: string }, ctx: unknown): Promise<{ forgotten: boolean }>;
+		};
+		return tool.execute({ id }, { callId, abortSignal: new AbortController().signal });
+	};
+	return { turn, propose, tools, forget };
 }
 
 describe.skipIf(!available)("mnemonMemory", () => {
@@ -177,6 +191,30 @@ describe.skipIf(!available)("mnemonMemory", () => {
 				"support lead",
 			);
 			expect(kept.status).toBe("stored");
+		});
+	});
+
+	it("forgets a recalled memory only in its own partition when enabled", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const events: MnemonEveEvent[] = [];
+			expect(Object.keys(await slot(client, "personal", ["tenant-a", "user-1"]).tools())).toEqual([
+				"propose_memory",
+			]);
+			const mine = slot(client, "personal", ["tenant-a", "user-1"], events, fakeEvaluate, undefined, true);
+			const theirs = slot(client, "personal", ["tenant-a", "user-2"], [], fakeEvaluate, undefined, true);
+			const { id } = await mine.propose("User one prefers invoices summarised in a table");
+			const recalled = (await mine.turn("invoices table")).messages[0]?.content;
+			expect(recalled).toContain(id);
+			expect((await mine.tools()).forget_memory).toHaveProperty("approval");
+
+			expect(await theirs.forget(id!)).toEqual({ forgotten: false });
+			expect(await mine.forget(id!, "call-1")).toEqual({ forgotten: true });
+			expect(await mine.forget(id!, "call-1")).toEqual({ forgotten: true });
+			expect((await mine.turn("invoices table")).messages).toEqual([]);
+			expect(events.filter((e) => e.type === "forget")).toMatchObject([
+				{ status: "forgotten", replayed: false },
+				{ status: "forgotten", replayed: true },
+			]);
 		});
 	});
 
