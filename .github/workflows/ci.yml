@@ -36,3 +36,31 @@ jobs:
       - run: npm run lint
       - run: npm run check-types
       - run: npm test
+
+  publish:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm ci
+      - name: Check tag matches package versions
+        run: |
+          for pkg in core eve; do
+            version=$(node -p "require('./packages/$pkg/package.json').version")
+            if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+              echo "packages/$pkg is $version but the tag is $GITHUB_REF_NAME" >&2
+              exit 1
+            fi
+          done
+      # prepack builds dist/; core must publish before eve.
+      - run: npm publish -w @romanbsd/mnemon-core --access public
+      - run: npm publish -w @romanbsd/mnemon-eve --access public

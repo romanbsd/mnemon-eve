@@ -37,9 +37,11 @@ npm install @romanbsd/mnemon-eve @romanbsd/mnemon-core
 ## Releasing
 
 CI (`.github/workflows/ci.yml`) runs lint, type checks, build, and the tests
-against PostgreSQL + pgvector on every push, pull request, and `v*` tag.
-Publishing to npmjs is manual. Publish core before eve because eve depends on
-core.
+against PostgreSQL + pgvector on every push, pull request, and `v*` tag. After
+the checks pass on a new `v*` tag, GitHub Actions publishes both packages to
+npmjs through trusted publishing, core before eve. The tag must equal both
+package versions. The npmjs trusted publisher for each package is
+`romanbsd/mnemon-eve`, workflow `ci.yml`, with `npm publish` allowed.
 
 ```sh
 npm version 0.1.1 -w @romanbsd/mnemon-core -w @romanbsd/mnemon-eve --no-git-tag-version
@@ -47,9 +49,6 @@ npm version 0.1.1 -w @romanbsd/mnemon-core -w @romanbsd/mnemon-eve --no-git-tag-
 npm install   # refresh package-lock.json
 git commit -am "chore: release 0.1.1"
 git push origin master
-npm login --registry=https://registry.npmjs.org  # if needed
-npm publish -w @romanbsd/mnemon-core --access public --auth-type=web
-npm publish -w @romanbsd/mnemon-eve --access public --auth-type=web
 git tag v0.1.1
 git push origin v0.1.1
 ```
