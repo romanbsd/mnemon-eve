@@ -296,17 +296,18 @@ export async function ensureVectorIndex(
 	const s = quoteIdent(schema);
 	const index = `${s}.insights_embedding_hnsw_idx`;
 	const check = async (client: Pool | PoolClient) => {
-		const found = await client.query<{ def: string | null }>(
-			"SELECT pg_get_indexdef(to_regclass($1)) AS def",
+		// The indexed expression's typmod is its vector dimension.
+		const found = await client.query<{ dimensions: number }>(
+			"SELECT atttypmod AS dimensions FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum = 1",
 			[index],
 		);
-		const def = found.rows[0]?.def;
-		if (def && !def.includes(`::vector(${String(dimensions)}))`)) {
+		const built = found.rows[0]?.dimensions;
+		if (built !== undefined && built !== dimensions) {
 			throw new MnemonConfigurationError(
-				`${index} was built for other embedding dimensions than ${String(dimensions)}; drop it and reconnect: ${def}`,
+				`${index} was built for ${String(built)} embedding dimensions, not ${String(dimensions)}; drop it and reconnect`,
 			);
 		}
-		return def != null;
+		return built !== undefined;
 	};
 	if (await check(pool)) {
 		return;
@@ -330,7 +331,10 @@ export async function assertPgvectorVersion(pool: Pool): Promise<void> {
 	const result = await pool.query<{ version: string | null }>(
 		"SELECT extversion AS version FROM pg_extension WHERE extname = 'vector'",
 	);
-	const version = result.rows[0]?.version ?? "0";
+	const version = result.rows[0]?.version;
+	if (version == null) {
+		throw new MnemonConfigurationError("pgvector extension is not installed");
+	}
 	const [major = 0, minor = 0] = version.split(".").map(Number);
 	if (major === 0 && minor < 8) {
 		throw new MnemonConfigurationError(

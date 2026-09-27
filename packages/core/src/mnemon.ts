@@ -214,7 +214,7 @@ class PostgresMnemonClient implements MnemonClient {
 		}
 		if (this.config.embeddingProvider) {
 			await assertPgvectorVersion(this.pool).catch((error: unknown) => {
-				throw wrapDatabaseError(error);
+				throw error instanceof MnemonError ? error : wrapDatabaseError(error);
 			});
 			// Before the index, so a wrong provider cannot build it for its dimensions.
 			await this.checkStoreSetting(
@@ -280,7 +280,8 @@ class PostgresMnemonClient implements MnemonClient {
 				// is_local = true: settings vanish at COMMIT/ROLLBACK, so a pooled
 				// connection never carries one caller's identity into the next.
 				// Filtered HNSW scans keep going until LIMIT rows pass RLS and namespace.
-				// Only set with the index: pgvector < 0.8 rejects the unknown setting.
+				// initialize() has already required pgvector 0.8+; older versions
+				// would silently accept and ignore this setting.
 				const hnsw =
 					this.vectorDimensions === undefined
 						? ""

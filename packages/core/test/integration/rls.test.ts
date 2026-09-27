@@ -254,7 +254,7 @@ describe.skipIf(!available)("row-level security", () => {
 				schema,
 				embeddingProvider: new FakeEmbeddingProvider("fixture", 8, {}),
 			});
-			await expect(other.initialize()).rejects.toThrow(/other embedding dimensions/);
+			await expect(other.initialize()).rejects.toThrow(/built for 4 embedding dimensions, not 8/);
 			await other.close();
 		});
 	});
