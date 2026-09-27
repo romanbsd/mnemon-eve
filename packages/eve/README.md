@@ -14,7 +14,8 @@ OpenAI-compatible LLM or your own function also works.
 
 Identity comes only from Eve's authenticated session; the model never supplies
 tenant or user ids. Every query is partitioned by tenant, user, and a
-namespace, and PostgreSQL row-level security enforces the tenant boundary.
+namespace, and PostgreSQL row-level security enforces the tenant and user
+boundaries.
 
 ## Contents
 
@@ -263,13 +264,27 @@ session auth ──> scope resolver ──> locked Eve scope (tenant[, user]) + 
 ### Namespaces
 
 A memory's partition is its tenant, its user (personal slots only), and a
-Mnemon namespace. Tenant and user come from the locked Eve scope value, so
-isolation never depends on the namespace.
+Mnemon namespace. Tenant and user come from the locked Eve scope value and
+are enforced by PostgreSQL row-level security: the tenant always, the user
+through core's `enforceUserScope` policy, which is on by default.
+
+The namespace names the application. It lets several applications share one
+database even when their tenant ids overlap. It is not a security boundary:
+an agent can read another application's memories of the same tenant (and
+user) by using that application's namespace.
 
 With `namespace` set, the Mnemon namespace is that string. Slots and agents
 that use the same string share memory for the same tenant (and user);
 production, previews, and local runs share it too if they use one database.
 Use separate databases or different strings to keep them apart.
+
+A fixed namespace on a personal slot puts every user of a tenant in one
+namespace. The user policy keeps their memories apart, but Mnemon's
+duplicate key does not include the user: if a second user proposes a fact
+another user already stored, the write fails and the proposal emits an
+`error` event. Use a separate namespace per slot, and keep
+`enforceUserScope` on; without it, users of a tenant recall each other's
+personal memories.
 
 Without it, the namespace is Eve's `memory.scope.key`, a digest of Eve's
 memory namespace and the scope value. Unless the slot sets an Eve `namespace`
@@ -287,7 +302,7 @@ memories: scope the client with the same tenant, user, and namespace.
 
 On `turn.started`, the provider searches with the user's text from the
 current turn and injects up to `recallLimit` memories. Their total content is
-capped at `recallCharBudget` characters. Each memory arrives as a slot-scoped
+capped at `recallCharBudget` characters, labels included. Each memory arrives as a slot-scoped
 message, labelled as untrusted:
 
 ```text
@@ -367,8 +382,15 @@ It returns:
 { "status": "rejected", "reasons": ["transient"] }
 ```
 
-Steps 2–5 run exactly once per tool `callId` + slot + fact. A replayed tool
-call returns the same result without calling the gate or writing again.
+A fact that is empty after normalizing whitespace is rejected with reason
+`empty`; a secret with `sensitive`.
+
+The result is recorded once per scope + tool `callId` + slot + fact. A replayed
+tool call returns the recorded result without calling the gate or writing
+again. Step 2 and the write each run in a short transaction; the gate runs
+between them with no database connection held. Two concurrent calls with the
+same `callId` may both call the gate, but only the first result is recorded
+and both return it.
 
 There is deliberately no automatic `turn.completed` capture: the model
 proposes, and the gate provides precision.
@@ -380,8 +402,8 @@ mnemonMemory({
   client: mnemon,          // MnemonClient from createMnemon (required)
   audience: "personal",    // "organization" | "personal" (required)
   recallLimit: 5,          // memories injected per turn
-  recallCharBudget: 4000,  // total recalled characters per turn
-  relatedLimit: 5,         // same-scope memories shown to the gate
+  recallCharBudget: 4000,  // total recalled characters per turn, labels included
+  relatedLimit: 5,         // same-scope memories shown to the gate (limits: positive integers)
   recallFilter: undefined, // drops unhelpful recalled memories; see Recall filter
   gate: undefined,         // decides what is stored; default depends on TYPESAFE_API_KEY, see Gates
   namespace: "org-memory", // fixed Mnemon namespace; default Eve's scope.key, see Namespaces
@@ -598,6 +620,7 @@ mnemonMemory({ client: mnemon, audience: "organization", gate: guarded });
 ```
 
 For a gate backed by another model, reuse `gateState(input)` (the JSON state),
+`classification(category, importance)` (keeps only valid values),
 `GATE_QUESTIONS`, and `decide(flags)`.
 
 ### Failure behaviour
@@ -607,9 +630,10 @@ For a gate backed by another model, reuse `gateState(input)` (the JSON state),
 - An HTTP error from `llmGate` throws `MnemonEveGateError`. The error carries
   only the status code, because the response body might echo the fact. The
   tool call fails, nothing is stored, and a retry runs again.
-- The gate runs inside the database transaction that guarantees
-  exactly-once. Each proposal in flight holds one pooled connection for the
-  duration of the gate call, so size the pool for concurrent proposals.
+- The gate runs outside any database transaction, so a slow gate does not
+  hold a pooled connection or block recall.
+- Any failure after the secret pre-filter emits a `proposal` event with
+  status `error` and rethrows. Nothing is recorded, so a retry runs again.
 
 ## Judges
 
@@ -666,7 +690,7 @@ mnemonMemory({
 | Event | Fields |
 | --- | --- |
 | `recall` | `slot`, `audience`, `operationId`, `partition`, `count`, `candidates?` (shown to the filter), `filterFailed?`, `latencyMs`, `replayed` |
-| `proposal` | `slot`, `audience`, `callId`, `partition`, `status`, `reasons`, `superseded` (count), `gateMs?`, `writeMs?`, `latencyMs`, `replayed` |
+| `proposal` | `slot`, `audience`, `callId`, `partition`, `status` (a `ProposalStatus` or `error`), `reasons`, `superseded` (count), `gateMs?`, `writeMs?`, `latencyMs`, `replayed` |
 
 Exceptions thrown inside `onEvent` are swallowed. Track proposal rate and
 acceptance rate. If useful facts are rarely proposed, strengthen the
@@ -679,13 +703,13 @@ instructions before adding automatic capture.
 2. Missing, anonymous, runtime, service, or ambiguous (multi-tenant) identity
    disables the slot.
 3. Personal memory is always tenant + user, never user alone.
-4. Every read and write is constrained by tenant, user, and namespace (the
-   fixed `namespace` option or Eve's scope key) inside the SQL query, before
-   ranking.
-5. The tenant is enforced by PostgreSQL RLS in a transaction-local context.
-   For a database-enforced user boundary too, create the client with
-   `enforceUserScope: true`. Each personal slot already has its own
-   namespace, which that mode needs.
+4. Every read and write is constrained by namespace inside the SQL query,
+   before ranking. The namespace separates applications, not users or
+   tenants.
+5. Tenant and user are enforced by PostgreSQL RLS in a transaction-local
+   context. The user boundary needs core's `enforceUserScope` (default
+   `true`); with it off, personal memories in a shared namespace are visible
+   to every user of the tenant.
 6. Related memories shown to the gate come only from the same scope.
 7. Recalled memories are labelled as untrusted data.
 8. Obvious secrets are dropped before any model call, and the gate rejects

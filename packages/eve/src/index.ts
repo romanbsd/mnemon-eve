@@ -2,6 +2,7 @@ export {
 	AUDIENCE_DESCRIPTIONS,
 	CATEGORY_QUESTION,
 	IMPORTANCE_QUESTION,
+	classification,
 	decide,
 	GATE_QUESTIONS,
 	type GateFlag,

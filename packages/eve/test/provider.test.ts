@@ -330,6 +330,99 @@ describe.skipIf(!available)("mnemonMemory", () => {
 		});
 	});
 
+	it("keeps personal memories per user in a shared fixed namespace", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const events: MnemonEveEvent[] = [];
+			const provider = mnemonMemory({
+				client,
+				audience: "personal",
+				gate: jevGate({ evaluate: fakeEvaluate }),
+				namespace: "personal-memory",
+				onEvent: (e) => events.push(e),
+			});
+			const memory = (user: string) => ({
+				slot: "personal",
+				scope: { key: `key-${user}`, namespace: "app", value: ["tenant-a", user] },
+			});
+			const propose = async (user: string, fact: string) => {
+				const tools = await provider.tools({ memory: memory(user), turn: { id: "t", sequence: 1, input: [] } } as never);
+				const tool = tools.propose_memory as unknown as {
+					execute(input: { fact: string }, ctx: unknown): Promise<ProposalResult>;
+				};
+				// Same callId for both users: once keys must not collide.
+				return tool.execute({ fact }, { callId: "c", abortSignal: new AbortController().signal });
+			};
+			const recall = (user: string) =>
+				provider.recall["turn.started"]({
+					memory: memory(user),
+					operationId: "op",
+					abortSignal: new AbortController().signal,
+					turn: { id: "t", sequence: 1, input: [{ role: "user", content: "invoice format" }] },
+				} as never) as Promise<{ messages: { content: string }[] }>;
+			// The user policy (enforceUserScope, on by default) separates them.
+			expect(await propose("user-1", "Prefers invoice summaries formatted as a table")).toMatchObject({ status: "stored" });
+			expect(await propose("user-2", "Prefers invoice summaries formatted as bullets")).toMatchObject({ status: "stored" });
+			expect((await recall("user-1")).messages.map((m) => m.content).join()).toContain("table");
+			const two = (await recall("user-2")).messages.map((m) => m.content).join();
+			expect(two).toContain("bullets");
+			expect(two).not.toContain("table");
+			expect((await recall("user-3")).messages).toEqual([]);
+			expect(events.filter((e) => e.replayed)).toEqual([]);
+		});
+	});
+
+	it("reports a failed proposal and records nothing", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			const events: MnemonEveEvent[] = [];
+			let fail = true;
+			const provider = mnemonMemory({
+				client,
+				audience: "organization",
+				gate: async () => {
+					if (fail) throw new Error("gate down");
+					return { accept: true, reasons: [] };
+				},
+				onEvent: (e) => events.push(e),
+			});
+			const memory = { slot: "organization", scope: { key: "k", namespace: "app", value: ["tenant-a"] } };
+			const tools = await provider.tools({ memory, turn: { id: "t", sequence: 1, input: [] } } as never);
+			const tool = tools.propose_memory as unknown as {
+				execute(input: { fact: string }, ctx: unknown): Promise<ProposalResult>;
+			};
+			const propose = (fact: string) =>
+				tool.execute({ fact }, { callId: "c", abortSignal: new AbortController().signal });
+			const fact = "Refunds over 500 euros need CFO approval";
+			await expect(propose(fact)).rejects.toThrow("gate down");
+			expect(events.at(-1)).toMatchObject({ type: "proposal", status: "error" });
+			fail = false;
+			expect(await propose(fact)).toMatchObject({ status: "stored" });
+			expect(await propose("   ")).toEqual({ status: "rejected", reasons: ["empty"] });
+		});
+	});
+
+	it("rejects invalid limits", () => {
+		for (const bad of [{ recallLimit: 0 }, { recallCharBudget: -1 }, { relatedLimit: 1.5 }]) {
+			expect(() =>
+				mnemonMemory({ client: {} as MnemonClient, audience: "organization", gate: jevGate({ evaluate: fakeEvaluate }), ...bad }),
+			).toThrow(RangeError);
+		}
+	});
+
+	it("counts recall labels against the character budget", async () => {
+		await withMnemon({}, async (_m, { client }) => {
+			await slot(client, "organization", ["tenant-a"]).propose("Refunds over 500 euros need CFO approval");
+			const provider = mnemonMemory({ client, audience: "organization", gate: jevGate({ evaluate: fakeEvaluate }), recallCharBudget: 120 });
+			const { messages } = (await provider.recall["turn.started"]({
+				memory: { slot: "organization", scope: { key: "eve-key:organization:tenant-a", namespace: "app", value: ["tenant-a"] } },
+				operationId: crypto.randomUUID(),
+				abortSignal: new AbortController().signal,
+				turn: { id: "t", sequence: 1, input: [{ role: "user", content: "who approves refunds?" }] },
+			} as never)) as { messages: { content: string }[] };
+			expect(messages).toHaveLength(1);
+			expect(messages[0]!.content.length).toBeLessThanOrEqual(120);
+		});
+	});
+
 	it("rejects an invalid fixed namespace", () => {
 		for (const namespace of ["", " padded", "x".repeat(201)]) {
 			expect(() =>
