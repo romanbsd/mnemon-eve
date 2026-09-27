@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 
 import { quoteIdent } from "../config.js";
-import { MnemonConfigurationError } from "../errors.js";
+import { MnemonConfigurationError, MnemonDatabaseError } from "../errors.js";
 import { withTransaction, wrapDatabaseError } from "./transaction.js";
 
 export const MIGRATION_VERSION = 2;
@@ -16,6 +16,9 @@ const TENANCY_COLUMNS = `
 
 const TENANT_MATCH = `tenant_id = current_setting('mnemon.tenant_id', true)`;
 const USER_MATCH = `user_id IS NOT DISTINCT FROM nullif(current_setting('mnemon.user_id', true), '')`;
+
+// unique_violation, duplicate_schema, duplicate_table, duplicate_object
+const DUPLICATE_OBJECT = new Set(["23505", "42P06", "42P07", "42710"]);
 
 export const RLS_TABLES = ["insights", "edges", "oplog", "operations"] as const;
 
@@ -51,7 +54,8 @@ export async function runMigrations(
 		);
 	}
 
-	return withTransaction(pool, async (client) => {
+	const migrate = () => withTransaction(pool, async (client) => {
+		await lockSchema(client, schema);
 		await client.query(`CREATE SCHEMA IF NOT EXISTS ${s}`);
 		await client.query(`
       CREATE TABLE IF NOT EXISTS ${s}.schema_migrations (
@@ -240,6 +244,16 @@ export async function runMigrations(
 		}
 		throw wrapDatabaseError(error);
 	});
+	try {
+		return await migrate();
+	} catch (error) {
+		// The advisory lock does not refresh cached catalog lookups, so a
+		// concurrent first install can still collide once; the retry sees it.
+		if (error instanceof MnemonDatabaseError && DUPLICATE_OBJECT.has(error.code ?? "")) {
+			return migrate();
+		}
+		throw error;
+	}
 }
 
 /**
@@ -261,10 +275,18 @@ async function upgradeToV2(client: PoolClient, s: string): Promise<void> {
 	);
 }
 
+/** Serializes concurrent DDL from several instances booting at once. */
+async function lockSchema(client: PoolClient, schema: string): Promise<void> {
+	await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+		`mnemon:ddl:${schema}`,
+	]);
+}
+
 /**
  * Creates the HNSW index vector search uses once the embedding dimensions are
  * known. Idempotent; skips the DDL when the index exists, so an app role
- * without CREATE works after the owner has run it once.
+ * without CREATE works after the owner has run it once. An index built for
+ * other dimensions is an error: queries would skip it and writes would fail.
  */
 export async function ensureVectorIndex(
 	pool: Pool,
@@ -272,18 +294,49 @@ export async function ensureVectorIndex(
 	dimensions: number,
 ): Promise<void> {
 	const s = quoteIdent(schema);
-	const found = await pool.query<{ found: boolean }>(
-		"SELECT to_regclass($1) IS NOT NULL AS found",
-		[`${s}.insights_embedding_hnsw_idx`],
-	);
-	if (found.rows[0]?.found) {
+	const index = `${s}.insights_embedding_hnsw_idx`;
+	const check = async (client: Pool | PoolClient) => {
+		const found = await client.query<{ def: string | null }>(
+			"SELECT pg_get_indexdef(to_regclass($1)) AS def",
+			[index],
+		);
+		const def = found.rows[0]?.def;
+		if (def && !def.includes(`::vector(${String(dimensions)}))`)) {
+			throw new MnemonConfigurationError(
+				`${index} was built for other embedding dimensions than ${String(dimensions)}; drop it and reconnect: ${def}`,
+			);
+		}
+		return def != null;
+	};
+	if (await check(pool)) {
 		return;
 	}
-	await pool.query(`
-      CREATE INDEX IF NOT EXISTS insights_embedding_hnsw_idx
+	await withTransaction(pool, async (client) => {
+		// A table lock, unlike an advisory one, refreshes the catalog lookup below.
+		await client.query(`LOCK TABLE ${s}.insights IN SHARE ROW EXCLUSIVE MODE`);
+		if (await check(client)) {
+			return;
+		}
+		await client.query(`
+      CREATE INDEX insights_embedding_hnsw_idx
           ON ${s}.insights USING hnsw ((embedding::vector(${String(dimensions)})) vector_cosine_ops)
           WHERE deleted_at IS NULL AND embedding IS NOT NULL
     `);
+	});
+}
+
+/** Vector search relies on hnsw.iterative_scan, which older pgvector ignores. */
+export async function assertPgvectorVersion(pool: Pool): Promise<void> {
+	const result = await pool.query<{ version: string | null }>(
+		"SELECT extversion AS version FROM pg_extension WHERE extname = 'vector'",
+	);
+	const version = result.rows[0]?.version ?? "0";
+	const [major = 0, minor = 0] = version.split(".").map(Number);
+	if (major === 0 && minor < 8) {
+		throw new MnemonConfigurationError(
+			`pgvector ${version} is too old; 0.8 or later is required with an embedding provider (ALTER EXTENSION vector UPDATE)`,
+		);
+	}
 }
 
 /**
@@ -296,6 +349,7 @@ export async function ensureUserScopePolicy(
 ): Promise<void> {
 	const s = quoteIdent(schema);
 	await withTransaction(pool, async (client) => {
+		await lockSchema(client, schema);
 		const existing = await client.query<{ tablename: string }>(
 			`SELECT tablename FROM pg_policies WHERE schemaname = $1 AND policyname = 'mnemon_user'`,
 			[schema],

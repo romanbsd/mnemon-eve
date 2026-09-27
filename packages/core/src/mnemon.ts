@@ -86,6 +86,7 @@ import {
 	MnemonNotFoundError,
 } from "./errors.js";
 import {
+	assertPgvectorVersion,
 	assertRlsEnforced,
 	ensureUserScopePolicy,
 	ensureVectorIndex,
@@ -170,7 +171,11 @@ class PostgresMnemonClient implements MnemonClient {
 	private initPromise: Promise<void> | undefined;
 	private closed = false;
 
-	/** Set once the store's embedding settings are known to match; they never change. */
+	/**
+	 * Set once the store's embedding settings are known to match. Never reset:
+	 * settings do not change under a live client, so recreate the client after
+	 * dropping or recreating the schema.
+	 */
 	private readonly embeddingSettings = { confirmed: false };
 
 	/** Set when vector search runs on the HNSW index. */
@@ -207,16 +212,11 @@ class PostgresMnemonClient implements MnemonClient {
 				},
 			);
 		}
-		if (this.vectorDimensions !== undefined) {
-			await ensureVectorIndex(
-				this.pool,
-				this.config.schema,
-				this.vectorDimensions,
-			).catch((error: unknown) => {
+		if (this.config.embeddingProvider) {
+			await assertPgvectorVersion(this.pool).catch((error: unknown) => {
 				throw wrapDatabaseError(error);
 			});
-		}
-		if (this.config.embeddingProvider) {
+			// Before the index, so a wrong provider cannot build it for its dimensions.
 			await this.checkStoreSetting(
 				"embedding_dimensions",
 				this.config.embeddingProvider.dimensions,
@@ -227,6 +227,15 @@ class PostgresMnemonClient implements MnemonClient {
 				this.config.embeddingProvider.model,
 				"embedding provider model",
 			);
+		}
+		if (this.vectorDimensions !== undefined) {
+			await ensureVectorIndex(
+				this.pool,
+				this.config.schema,
+				this.vectorDimensions,
+			).catch((error: unknown) => {
+				throw error instanceof MnemonError ? error : wrapDatabaseError(error);
+			});
 		}
 	}
 
@@ -270,16 +279,16 @@ class PostgresMnemonClient implements MnemonClient {
 				await this.registerVectorTypes(client);
 				// is_local = true: settings vanish at COMMIT/ROLLBACK, so a pooled
 				// connection never carries one caller's identity into the next.
+				// Filtered HNSW scans keep going until LIMIT rows pass RLS and namespace.
+				// Only set with the index: pgvector < 0.8 rejects the unknown setting.
+				const hnsw =
+					this.vectorDimensions === undefined
+						? ""
+						: ", set_config('hnsw.iterative_scan', 'strict_order', true)";
 				await client.query(
-					"SELECT set_config('mnemon.tenant_id', $1, true), set_config('mnemon.user_id', $2, true)",
+					`SELECT set_config('mnemon.tenant_id', $1, true), set_config('mnemon.user_id', $2, true)${hnsw}`,
 					[auth.tenantId, auth.userId ?? ""],
 				);
-				if (this.vectorDimensions !== undefined) {
-					// Filtered HNSW scans keep going until LIMIT rows pass RLS and namespace.
-					await client.query(
-						"SELECT set_config('hnsw.iterative_scan', 'strict_order', true)",
-					);
-				}
 				try {
 					return await fn(
 						new MnemonService(

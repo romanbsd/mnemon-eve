@@ -15,7 +15,7 @@ export function termPattern(terms: readonly string[]): RegExp {
 	// An empty alternative would match everywhere, so leave empty lists out.
 	const parts = [...other];
 	if (ascii.length > 0) parts.unshift(`\\b(?:${ascii.join("|")})\\b`);
-	return new RegExp(parts.join("|"), "g");
+	return parts.length > 0 ? new RegExp(parts.join("|"), "g") : /(?!)/g;
 }
 
 const WHY = termPattern(WHY_TERMS);

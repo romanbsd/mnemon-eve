@@ -34,5 +34,6 @@ describe("termPattern", () => {
 	it("never matches the empty string when a script list is empty", () => {
 		expect("hello why world".match(termPattern(["why"]))).toEqual(["why"]);
 		expect("hello 为什么".match(termPattern(["为什么"]))).toEqual(["为什么"]);
+		expect("hello".match(termPattern([]))).toBeNull();
 	});
 });

@@ -375,6 +375,25 @@ describe.skipIf(!available)("postgres integration", () => {
 		});
 	});
 
+	it("keeps an explicit link's weight when a generated edge collides with it", async () => {
+		await withMnemon({ clock }, async (mnemon, { admin, schema }) => {
+			const id = randomUUID();
+			await mnemon.upsert({ id, content: "Managed note one" });
+			const peer = await mnemon.remember({ content: "Peer note two", entities: ["Apollo"] });
+			for (const [sourceId, targetId] of [[id, peer.insight.id], [peer.insight.id, id]] as const) {
+				await mnemon.link({ sourceId, targetId, edgeType: "entity", weight: 1, metadata: { src: "link" } });
+			}
+			await mnemon.upsert({ id, content: "Managed note rewritten", entities: ["Apollo"] });
+			const { rows } = await admin.query<{ weight: number; metadata: unknown; derived: boolean }>(
+				`SELECT weight, metadata, derived FROM ${schema}.edges WHERE edge_type = 'entity'`,
+			);
+			expect(rows).toEqual([
+				{ weight: 1, metadata: { src: "link" }, derived: false },
+				{ weight: 1, metadata: { src: "link" }, derived: false },
+			]);
+		});
+	});
+
 	it("embeds scoped and prepared texts before the transaction opens", async () => {
 		let inTransaction = false;
 		const calls: boolean[] = [];

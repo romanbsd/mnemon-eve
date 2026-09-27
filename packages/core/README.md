@@ -135,8 +135,11 @@ The transaction stays open while `fn` awaits anything, including the embedding
 provider and [judges](#judges). `scope()` embeds a call's `content` or `query`
 before the transaction opens. With `withAuthorization`, pass the texts `fn`
 will remember (`"document"`) or recall (`"query"`) in `options.embed` for the
-same effect; other texts are embedded inside the transaction. Judges always
-run inside it. So:
+same effect; other texts are embedded inside the transaction. Pre-embedding
+happens before anything else, so it is paid even when the call then skips the
+vector (an exact duplicate, a `once` replay) or fails validation. A text that
+does not match what `fn` passes, after trimming, is silently embedded again
+inside the transaction. Judges always run inside it. So:
 
 - size the pool for concurrent requests times provider latency;
 - give providers and judges timeouts (the built-in providers default to 10 s);

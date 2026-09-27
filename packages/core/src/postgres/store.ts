@@ -1207,10 +1207,13 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
         AS edge_rows(source_id, target_id, edge_type, weight, metadata, created_at, derived)
       ON CONFLICT (tenant_id, namespace, source_id, target_id, edge_type)
       DO UPDATE SET
-          weight = EXCLUDED.weight,
-          metadata = EXCLUDED.metadata,
-          created_at = EXCLUDED.created_at,
-          -- An explicit link stays explicit.
+          -- A generated edge never overwrites an explicit link.
+          weight = CASE WHEN ${this.s}.edges.derived OR NOT EXCLUDED.derived
+                   THEN EXCLUDED.weight ELSE ${this.s}.edges.weight END,
+          metadata = CASE WHEN ${this.s}.edges.derived OR NOT EXCLUDED.derived
+                     THEN EXCLUDED.metadata ELSE ${this.s}.edges.metadata END,
+          created_at = CASE WHEN ${this.s}.edges.derived OR NOT EXCLUDED.derived
+                       THEN EXCLUDED.created_at ELSE ${this.s}.edges.created_at END,
           derived = ${this.s}.edges.derived AND EXCLUDED.derived
       RETURNING *
       `,

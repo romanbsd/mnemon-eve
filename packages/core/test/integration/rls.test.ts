@@ -246,6 +246,36 @@ describe.skipIf(!available)("row-level security", () => {
 		});
 	});
 
+	it("rejects an HNSW index built for other dimensions", async () => {
+		const provider = new FakeEmbeddingProvider("fixture", 4, {});
+		await withMnemon({ clock, embeddingProvider: provider }, async (_m, { pool, schema }) => {
+			const other = createMnemon({
+				pool,
+				schema,
+				embeddingProvider: new FakeEmbeddingProvider("fixture", 8, {}),
+			});
+			await expect(other.initialize()).rejects.toThrow(/other embedding dimensions/);
+			await other.close();
+		});
+	});
+
+	it("migrates concurrently from fresh and from v1", async () => {
+		const admin = adminPool();
+		const schema = uniqueSchema();
+		const s = quoteIdent(schema);
+		const race = () => Promise.all([1, 2, 3].map(() => runMigrations(admin, schema)));
+		try {
+			expect(await race()).toEqual([2, 2, 2]);
+			await admin.query(`ALTER TABLE ${s}.edges DROP COLUMN derived`);
+			await admin.query(`DROP INDEX ${s}.insights_entities_lower_gin_idx`);
+			await admin.query(`DELETE FROM ${s}.schema_migrations WHERE version = 2`);
+			expect(await race()).toEqual([2, 2, 2]);
+		} finally {
+			await admin.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`).catch(() => {});
+			await admin.end();
+		}
+	});
+
 	it("installs the user-scope policy idempotently", async () => {
 		const admin = adminPool();
 		const schema = uniqueSchema();
