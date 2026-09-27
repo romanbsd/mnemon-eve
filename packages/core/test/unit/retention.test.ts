@@ -21,9 +21,9 @@ describe("effectiveImportance", () => {
 		expect(ei({ daysSinceAccess: 60 })).toBeCloseTo(0.125);
 	});
 
-	it("boosts by log access count, never below 1x", () => {
+	it("boosts by log access count, never below 1x, capped at 1", () => {
 		expect(ei({ accessCount: 1 })).toBeCloseTo(0.5);
-		expect(ei({ accessCount: 10 })).toBeCloseTo(0.5 * Math.log1p(10));
+		expect(ei({ accessCount: 10 })).toBeCloseTo(1);
 	});
 
 	it("adds 10% per edge, capped at 5 edges", () => {

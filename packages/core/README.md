@@ -150,7 +150,7 @@ await client.withAuthorization(auth, async (tx) => {
 | `search(input)` | Keyword and full-text search only (no graph, no vectors). |
 | `list(input?)` | Newest first, with filters. |
 | `get(id)` | One memory or `null`. |
-| `related(id, options?)` | Graph neighbours up to `maxDepth` hops. |
+| `related(id, options?)` | Graph neighbours up to `maxDepth` hops (1–5, default 2); `limit` 1–100, default 20. Out-of-range values throw. |
 | `link(input)` | Add or update an edge. |
 | `forget(id)` | Soft-delete. |
 | `log(input?)` | Operation history. |
@@ -235,14 +235,21 @@ match can still lead to related memories of that category through the graph.
 
 #### Retention
 
-Memories decay: effective importance is importance, halved every 30 days since
-last access, boosted by access count and edges. `retentionCandidates` lists
-the weakest ones for review. It never deletes anything, and memories with
-importance 4+ or 3+ accesses are immune. Recall counts as an access.
+Memories decay: effective importance (0–1) starts at 0.15, 0.3, 0.5, 0.8, or
+1 for importance 1–5, halves every 30 days since last access, and is boosted
+by access count and edges. `retentionCandidates` lists the weakest ones for
+review. It never deletes anything, and memories with importance 4+ or 3+
+accesses are immune. Recall counts as an access, so memories recalled in
+three turns never become candidates.
+
+With the default threshold of 0.25, an unlinked memory becomes a candidate
+immediately at importance 1, after about 8 days without access at importance
+2, and after 30 days at importance 3. Edges push that out. The call stores
+changed scores on the rows it reads.
 
 ```ts
 const { total, candidates } = await memory.retentionCandidates({
-  threshold: 0.5, // effective importance below this is a candidate (default)
+  threshold: 0.25, // effective importance below this is a candidate (default)
   limit: 20,
 });
 for (const c of candidates) {
@@ -255,6 +262,27 @@ await memory.keep(candidates[1].insight.id);   // or keep it: +3 accesses, fresh
 
 A periodic job can forget candidates automatically; prefer a low threshold, or
 have a person or model review them first.
+
+#### Pruning
+
+Nothing in core deletes rows on its own. `forget` keeps a tombstone with the
+full content and embedding, every `recall` and write appends to the op log,
+and every `once` call stores a record. Run `prune` periodically:
+
+```ts
+const day = 86_400_000;
+const { oplog, operations, forgotten } = await memory.prune({
+  oplogBefore: new Date(Date.now() - 90 * day),      // audit history to keep
+  operationsBefore: new Date(Date.now() - 7 * day),  // longer than any replay window
+  forgottenBefore: new Date(Date.now() - 30 * day),  // permanently delete tombstones
+});
+```
+
+Each cutoff is optional, but at least one is required. It runs per
+namespace, under the same tenant and user as any other call. With the user
+policy on, run it once per user and once without a `userId` for tenant-wide
+rows. A pruned `once` key runs again if it is replayed. Op-log entries that
+outlive a deleted memory keep their record but lose their `insightId`.
 
 #### Import and receipts
 

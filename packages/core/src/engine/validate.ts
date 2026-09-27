@@ -412,6 +412,22 @@ function validateCategoryFilter(category: InsightCategory | undefined): void {
 	}
 }
 
+export function validatePruneInput(input: {
+	oplogBefore?: Date;
+	operationsBefore?: Date;
+	forgottenBefore?: Date;
+}): void {
+	const dates = [input.oplogBefore, input.operationsBefore, input.forgottenBefore];
+	if (dates.every((d) => d === undefined)) {
+		fail("prune", "invalid", "prune needs oplogBefore, operationsBefore, or forgottenBefore");
+	}
+	for (const d of dates) {
+		if (d !== undefined && (!(d instanceof Date) || Number.isNaN(d.getTime()))) {
+			fail("prune", "invalid", "prune cutoffs must be valid Dates");
+		}
+	}
+}
+
 export function validateRetentionInput(input?: {
 	threshold?: number;
 	limit?: number;

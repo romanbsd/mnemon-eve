@@ -597,6 +597,39 @@ describe.skipIf(!available)("postgres integration", () => {
 		});
 	});
 
+	it("prunes old op-log entries, once records, and forgotten memories", async () => {
+		await withMnemon({ clock }, async (mnemon) => {
+			clock.set(new Date("2024-01-01T00:00:00Z"));
+			const old = await mnemon.remember({ content: "the old office was on main street" });
+			await mnemon.once("op-1", async () => 1);
+			await mnemon.forget(old.insight.id);
+			clock.set(new Date("2024-03-01T00:00:00Z"));
+			const recent = await mnemon.remember({ content: "the new office is on harbour road" });
+			await mnemon.forget(recent.insight.id);
+			const cutoff = new Date("2024-02-01T00:00:00Z");
+
+			await expect(mnemon.prune({})).rejects.toThrow(/prune needs/);
+			expect(await mnemon.prune({ forgottenBefore: cutoff })).toEqual({
+				oplog: 0,
+				operations: 0,
+				forgotten: 1,
+			});
+			const forgets = await mnemon.log({ operation: "forget" });
+			expect(forgets).toHaveLength(2);
+			expect(forgets.filter((e) => e.insightId)).toHaveLength(1);
+
+			// once records carry database time, not the injected clock.
+			const pruned = await mnemon.prune({
+				oplogBefore: cutoff,
+				operationsBefore: new Date(Date.now() + 60_000),
+			});
+			expect(pruned.oplog).toBeGreaterThan(0);
+			expect(pruned.operations).toBe(1);
+			expect((await mnemon.log()).every((e) => e.createdAt >= cutoff.toISOString())).toBe(true);
+			expect((await mnemon.once("op-1", async () => 2)).value).toBe(2);
+		});
+	});
+
 	it("lists retention candidates and keeps a memory out of them", async () => {
 		await withMnemon({ clock }, async (mnemon) => {
 			clock.set(new Date("2024-01-01T00:00:00Z"));

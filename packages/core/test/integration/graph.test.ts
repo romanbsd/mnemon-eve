@@ -94,6 +94,8 @@ describe.skipIf(!available)("graph maintenance", () => {
 			expect(all).toEqual(expect.arrayContaining([[b, 1], [e, 1], [c, 2], [d, 3]]));
 			expect((await walk({ maxDepth: 1 })).map(([id]) => id).sort()).toEqual([b, e].sort());
 			expect(await walk({ maxDepth: 3, limit: 2 })).toHaveLength(2);
+			await expect(walk({ maxDepth: 6 })).rejects.toMatchObject({ code: "out_of_range" });
+			await expect(walk({ limit: 0 })).rejects.toMatchObject({ code: "out_of_range" });
 			expect((await walk({ maxDepth: 3, edgeType: "causal" })).map(([id]) => id)).not.toContain(d);
 
 			await m.forget(b);

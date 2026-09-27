@@ -42,7 +42,11 @@ import {
 	countEdgesByType,
 	emptyEdgeCounts,
 } from "./engine/edges.js";
-import { extractEntitiesIndexed, mergeEntities } from "./engine/entities.js";
+import {
+	candidateWords,
+	extractEntitiesIndexed,
+	mergeEntities,
+} from "./engine/entities.js";
 import { detectIntent } from "./engine/intent.js";
 import { contentHash, normalizeContent } from "./engine/normalize.js";
 import {
@@ -62,6 +66,7 @@ import {
 	validateMetadata,
 	validateRecallInput,
 	validateRememberInput,
+	validatePruneInput,
 	validateRetentionInput,
 	validateSearchInput,
 	validateAuthorization,
@@ -104,6 +109,8 @@ import {
 	type MnemonStatus,
 	type OnceResult,
 	type OpLogEntry,
+	type PruneInput,
+	type PruneResult,
 	type RecallHit,
 	type RecallInput,
 	type RecallResult,
@@ -142,6 +149,7 @@ const SCOPED_METHODS = [
 	"status",
 	"retentionCandidates",
 	"keep",
+	"prune",
 	"embedMissing",
 	"once",
 ] as const satisfies readonly (keyof Mnemon)[];
@@ -423,7 +431,9 @@ class MnemonService implements Mnemon {
 		embedding: number[] | undefined,
 		now: Date,
 	) {
-		const known = new Set(await this.store.listKnownEntities());
+		const known = new Set(
+			await this.store.knownEntities(candidateWords(validated.content)),
+		);
 		const entities = mergeEntities(
 			validated.entities,
 			extractEntitiesIndexed(validated.content, known),
@@ -513,7 +523,9 @@ class MnemonService implements Mnemon {
 		const intent = validated.intent ?? detectIntent(validated.query);
 		const intentSource = validated.intent ? "override" : "auto";
 		const queryTokens = sortedTokens(validated.query);
-		const known = new Set(await this.store.listKnownEntities());
+		const known = new Set(
+			await this.store.knownEntities(candidateWords(validated.query)),
+		);
 		const queryEntities = extractEntitiesIndexed(validated.query, known);
 
 		const anchors = await this.store.selectRecallAnchors({
@@ -679,18 +691,19 @@ class MnemonService implements Mnemon {
 		options?: { maxDepth?: number; limit?: number; edgeType?: EdgeType },
 	): Promise<RelatedInsight[]> {
 		validateUuid(id, "id");
+		const maxDepth = requireLimit(
+			options?.maxDepth ?? DEFAULT_RELATED_DEPTH,
+			MAX_RELATED_DEPTH,
+			"maxDepth",
+		);
+		const limit = requireLimit(
+			options?.limit ?? DEFAULT_RELATED_LIMIT,
+			MAX_RELATED_LIMIT,
+		);
 		const start = await this.store.getActiveInsight(id);
 		if (!start) {
 			throw new MnemonNotFoundError(`insight ${id} not found`, id);
 		}
-		const maxDepth = Math.min(
-			Math.max(options?.maxDepth ?? DEFAULT_RELATED_DEPTH, 1),
-			MAX_RELATED_DEPTH,
-		);
-		const limit = Math.min(
-			Math.max(options?.limit ?? DEFAULT_RELATED_LIMIT, 1),
-			MAX_RELATED_LIMIT,
-		);
 		const walked = await this.store.walkRelated({
 			startId: id,
 			maxDepth,
@@ -807,11 +820,17 @@ class MnemonService implements Mnemon {
 				};
 			},
 		);
-		await this.store.withTransaction((tx) =>
-			tx.setEffectiveImportances(
-				new Map(scored.map((s) => [s.insight.id, s.effectiveImportance])),
-			),
+		// Write back only material changes: a read must not rewrite the namespace.
+		const changed = scored.filter(
+			(s) => Math.abs(s.effectiveImportance - s.insight.effectiveImportance) >= 0.01,
 		);
+		if (changed.length > 0) {
+			await this.store.withTransaction((tx) =>
+				tx.setEffectiveImportances(
+					new Map(changed.map((s) => [s.insight.id, s.effectiveImportance])),
+				),
+			);
+		}
 		const candidates = scored
 			.filter(
 				(s) =>
@@ -868,6 +887,11 @@ class MnemonService implements Mnemon {
 			return count;
 		});
 		return { embedded, remaining: Math.max(0, total - embedded) };
+	}
+
+	async prune(input: PruneInput): Promise<PruneResult> {
+		validatePruneInput(input);
+		return this.store.withTransaction((tx) => tx.prune(input));
 	}
 
 	async keep(id: string): Promise<Insight> {

@@ -58,6 +58,17 @@ function scanWords(text: string, visit: (word: string) => void): void {
 	}
 }
 
+/** Words `extractEntitiesIndexed` could match against stored entities. */
+export function candidateWords(text: string): string[] {
+	const words = new Set<string>();
+	scanWords(text, (word) => {
+		if (!ACRONYM_STOPWORDS.has(word)) {
+			words.add(word);
+		}
+	});
+	return [...words];
+}
+
 export function extractEntities(text: string): string[] {
 	return extractUncapped(text).slice(0, MAX_ENTITIES);
 }

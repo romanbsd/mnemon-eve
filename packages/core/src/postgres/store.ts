@@ -121,7 +121,7 @@ export interface MnemonStore {
 		queryVector?: readonly number[];
 	}): Promise<ScoredInsight[]>;
 	getEdgesForNodeIds(ids: readonly string[]): Promise<EdgeRecord[]>;
-	listKnownEntities(): Promise<string[]>;
+	knownEntities(words: readonly string[]): Promise<string[]>;
 	walkRecallGraph(input: {
 		anchors: readonly AnchorHit[];
 		intent: RecallIntent;
@@ -182,6 +182,11 @@ export interface MnemonStoreTx {
 	): Promise<void>;
 	linkAndLog(edge: NewEdgeRecord, at: Date): Promise<EdgeRecord>;
 	forgetAndLog(id: string, at: Date): Promise<boolean>;
+	prune(input: {
+		oplogBefore?: Date;
+		operationsBefore?: Date;
+		forgottenBefore?: Date;
+	}): Promise<{ oplog: number; operations: number; forgotten: number }>;
 	incrementAccess(ids: readonly string[], at: Date, by?: number): Promise<void>;
 }
 
@@ -633,19 +638,30 @@ export class PostgresMnemonStore implements MnemonStore {
 		const hits: RelatedWalkHit[] = [];
 		for (
 			let depth = 1;
-			depth <= input.maxDepth && frontier.length > 0;
+			depth <= input.maxDepth && frontier.length > 0 && hits.length < input.limit;
 			depth++
 		) {
 			const hop = await this.client.query<Record<string, unknown>>(
 				`
-        SELECT DISTINCT ON (neigh.id) neigh.id, e.weight, e.edge_type AS via
-        FROM unnest($2::uuid[]) AS f(id)
-        ${this.edgeHopJoin("f.id")}
-        WHERE ($3::text IS NULL OR e.edge_type = $3)
-          AND NOT neigh.id = ANY ($4::uuid[])
-        ORDER BY neigh.id, e.created_at ASC, e.ctid ASC
+        SELECT * FROM (
+            SELECT DISTINCT ON (neigh.id) neigh.id, e.weight, e.edge_type AS via
+            FROM unnest($2::uuid[]) AS f(id)
+            ${this.edgeHopJoin("f.id")}
+            WHERE ($3::text IS NULL OR e.edge_type = $3)
+              AND NOT neigh.id = ANY ($4::uuid[])
+            ORDER BY neigh.id, e.created_at ASC, e.ctid ASC
+        ) AS hop
+        -- Same order as the final sort, so capping a hop never changes the result.
+        ORDER BY weight DESC, id ASC
+        LIMIT $5
         `,
-				[this.namespace, frontier, input.edgeType ?? null, [...seen]],
+				[
+					this.namespace,
+					frontier,
+					input.edgeType ?? null,
+					[...seen],
+					input.limit - hits.length,
+				],
 			);
 			frontier = [];
 			for (const row of hop.rows) {
@@ -721,6 +737,7 @@ export class PostgresMnemonStore implements MnemonStore {
             ON i.namespace = $1
            AND i.deleted_at IS NULL
            AND i.id <> $2::uuid
+           -- ponytail: case-insensitive match scans the namespace; a lower(entities) GIN index needs a schema migration.
            AND EXISTS (
                  SELECT 1
                  FROM jsonb_array_elements_text(i.entities) AS stored
@@ -816,16 +833,22 @@ export class PostgresMnemonStore implements MnemonStore {
 		return result.rows.map((row) => mapEdgeRow(row));
 	}
 
-	async listKnownEntities(): Promise<string[]> {
+	async knownEntities(words: readonly string[]): Promise<string[]> {
+		if (words.length === 0) {
+			return [];
+		}
 		const result = await this.client.query<Record<string, unknown>>(
 			`
-      SELECT DISTINCT e AS entity
-      FROM ${this.s}.insights AS i,
-           jsonb_array_elements_text(i.entities) AS e
-      WHERE i.namespace = $1
-        AND i.deleted_at IS NULL
+      SELECT w AS entity
+      FROM unnest($2::text[]) AS w
+      WHERE EXISTS (
+          SELECT 1 FROM ${this.s}.insights AS i
+          WHERE i.namespace = $1
+            AND i.deleted_at IS NULL
+            AND i.entities @> jsonb_build_array(w)
+      )
       `,
-			[this.namespace],
+			[this.namespace, [...new Set(words)]],
 		);
 		return result.rows.map((row) => dbString(row.entity, "entity"));
 	}
@@ -1234,24 +1257,27 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 		model: string,
 		at: Date,
 	): Promise<void> {
-		const dim = await this.client.query<Record<string, unknown>>(
-			`
-      WITH ins_dim AS (
-        INSERT INTO ${this.s}.settings (key, value, updated_at)
-        VALUES ('embedding_dimensions', to_jsonb($1::int), $3)
-        ON CONFLICT (key) DO UPDATE SET key = ${this.s}.settings.key
-        RETURNING value
-      ),
-      ins_model AS (
-        INSERT INTO ${this.s}.settings (key, value, updated_at)
-        VALUES ('embedding_model', to_jsonb($2::text), $3)
-        ON CONFLICT (key) DO UPDATE SET key = ${this.s}.settings.key
-        RETURNING value
-      )
-      SELECT ins_dim.value AS dimensions, ins_model.value AS model FROM ins_dim, ins_model
+		// Plain read first: once both settings exist, writers take no row lock.
+		const read = () =>
+			this.client.query<Record<string, unknown>>(
+				`
+      SELECT (SELECT value FROM ${this.s}.settings WHERE key = 'embedding_dimensions') AS dimensions,
+             (SELECT value FROM ${this.s}.settings WHERE key = 'embedding_model') AS model
       `,
-			[dimensions, model, at],
-		);
+			);
+		let dim = await read();
+		if (dim.rows[0]?.dimensions == null || dim.rows[0].model == null) {
+			await this.client.query(
+				`
+        INSERT INTO ${this.s}.settings (key, value, updated_at)
+        VALUES ('embedding_dimensions', to_jsonb($1::int), $3),
+               ('embedding_model', to_jsonb($2::text), $3)
+        ON CONFLICT (key) DO NOTHING
+        `,
+				[dimensions, model, at],
+			);
+			dim = await read();
+		}
 		const stored = dim.rows[0];
 		if (Number(stored?.dimensions) !== dimensions) {
 			throw new MnemonConfigurationError(
@@ -1326,6 +1352,42 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 			[this.namespace, id, at],
 		);
 		return true;
+	}
+
+	async prune(input: {
+		oplogBefore?: Date;
+		operationsBefore?: Date;
+		forgottenBefore?: Date;
+	}): Promise<{ oplog: number; operations: number; forgotten: number }> {
+		const count = async (sql: string, cutoff: Date | undefined) =>
+			cutoff
+				? ((await this.client.query(sql, [this.namespace, cutoff])).rowCount ?? 0)
+				: 0;
+		const oplog = await count(
+			`DELETE FROM ${this.s}.oplog WHERE namespace = $1 AND created_at < $2`,
+			input.oplogBefore,
+		);
+		const operations = await count(
+			`DELETE FROM ${this.s}.operations WHERE namespace = $1 AND created_at < $2`,
+			input.operationsBefore,
+		);
+		// Kept op-log entries lose their link to a deleted memory, not the entry.
+		const forgotten = await count(
+			`
+      WITH gone AS (
+        SELECT id FROM ${this.s}.insights
+        WHERE namespace = $1 AND deleted_at < $2
+      ),
+      unlinked AS (
+        UPDATE ${this.s}.oplog SET insight_id = NULL
+        WHERE namespace = $1 AND insight_id IN (SELECT id FROM gone)
+      )
+      DELETE FROM ${this.s}.insights
+      WHERE namespace = $1 AND id IN (SELECT id FROM gone)
+      `,
+			input.forgottenBefore,
+		);
+		return { oplog, operations, forgotten };
 	}
 
 	async incrementAccess(ids: readonly string[], at: Date, by = 1): Promise<void> {

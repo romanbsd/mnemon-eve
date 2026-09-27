@@ -16,7 +16,7 @@ export const DEFAULT_SEARCH_LIMIT = 20;
 export const MAX_SEARCH_LIMIT = 100;
 export const DEFAULT_LIST_LIMIT = 20;
 export const DEFAULT_RETENTION_LIMIT = 20;
-export const DEFAULT_RETENTION_THRESHOLD = 0.5;
+export const DEFAULT_RETENTION_THRESHOLD = 0.25;
 /** Retention never proposes memories at or above either of these. */
 export const RETENTION_IMMUNE_IMPORTANCE = 4;
 export const RETENTION_IMMUNE_ACCESS = 3;

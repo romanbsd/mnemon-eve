@@ -23,5 +23,6 @@ export function effectiveImportance(input: {
 	const accessFactor = Math.max(1, Math.log1p(input.accessCount));
 	const decayFactor = 0.5 ** (input.daysSinceAccess / 30);
 	const edgeFactor = 1 + 0.1 * Math.min(input.edgeCount, 5);
-	return base * accessFactor * decayFactor * edgeFactor;
+	// Capped so the score and `threshold` share one 0–1 scale.
+	return Math.min(1, base * accessFactor * decayFactor * edgeFactor);
 }

@@ -178,15 +178,33 @@ export interface ListInput {
 }
 
 export interface RetentionInput {
-	/** Effective importance below which a memory is a candidate. Default 0.5. */
+	/** Effective importance (0–1) below which a memory is a candidate. Default 0.25. */
 	threshold?: number;
 	/** Default 20. */
 	limit?: number;
 }
 
+export interface PruneInput {
+	/** Delete op-log entries created before this time. */
+	oplogBefore?: Date;
+	/**
+	 * Delete `once` records created before this time (database clock); their
+	 * keys run again. Keep them longer than any replay window.
+	 */
+	operationsBefore?: Date;
+	/** Permanently delete memories forgotten before this time. */
+	forgottenBefore?: Date;
+}
+
+export interface PruneResult {
+	oplog: number;
+	operations: number;
+	forgotten: number;
+}
+
 export interface RetentionCandidate {
 	insight: Insight;
-	/** Importance decayed by time since last access, boosted by access and edges. */
+	/** 0–1: importance decayed by time since last access, boosted by access and edges. */
 	effectiveImportance: number;
 	daysSinceAccess: number;
 	edgeCount: number;
@@ -288,6 +306,11 @@ export interface Mnemon {
 	 * provider was configured, oldest first. Call until `remaining` is 0.
 	 */
 	embedMissing(input?: { limit?: number }): Promise<EmbedMissingResult>;
+	/**
+	 * Permanently deletes old op-log entries, `once` records, and forgotten
+	 * memories in this namespace. Nothing else in core deletes rows.
+	 */
+	prune(input: PruneInput): Promise<PruneResult>;
 	/** Marks a memory worth keeping: +3 accesses and a fresh access time. */
 	keep(id: string): Promise<Insight>;
 	/**

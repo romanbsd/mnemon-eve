@@ -55,6 +55,8 @@ export type {
 	MnemonStatus,
 	OnceResult,
 	OpLogEntry,
+	PruneInput,
+	PruneResult,
 	RecallHit,
 	RecallInput,
 	RecallIntent,
