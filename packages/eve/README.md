@@ -33,18 +33,8 @@ namespace, and PostgreSQL row-level security enforces the tenant boundary.
 
 ## Install
 
-The packages are published to GitHub Packages, not npmjs. Add an `.npmrc`
-next to your `package.json`:
-
-```ini
-@romanbsd:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
-
-`GITHUB_TOKEN` must be a token with `read:packages` (GitHub Packages asks for
-one even for public packages). In GitHub Actions, use `secrets.GITHUB_TOKEN`
-after granting the repository access under the package's **Manage Actions
-access** settings.
+These public packages are available directly from npmjs; no registry
+configuration or GitHub token is needed.
 
 ```sh
 npm install @romanbsd/mnemon-eve @romanbsd/mnemon-core eve zod

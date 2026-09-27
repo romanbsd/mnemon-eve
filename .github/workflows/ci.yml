@@ -43,15 +43,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          registry-url: https://npm.pkg.github.com
-          scope: "@romanbsd"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - run: npm ci
       - name: Check tag matches package versions
         run: |
@@ -64,8 +63,4 @@ jobs:
           done
       # prepack builds dist/; core first so eve's dependency resolves.
       - run: npm publish -w @romanbsd/mnemon-core
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm publish -w @romanbsd/mnemon-eve
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
