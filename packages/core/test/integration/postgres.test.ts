@@ -12,6 +12,7 @@ import {
 import {
 	appPool,
 	postgresAvailable,
+	TEST_NAMESPACE,
 	TEST_TENANT,
 	withMnemon,
 } from "./helpers.js";
@@ -356,6 +357,79 @@ describe.skipIf(!available)("postgres integration", () => {
 		});
 	});
 
+	it("replaces derived edges on upsert and keeps explicit links", async () => {
+		await withMnemon({ clock }, async (mnemon) => {
+			const id = randomUUID();
+			await mnemon.upsert({ id, content: "Managed note one", entities: ["Apollo"] });
+			const peer = await mnemon.remember({ content: "Peer note two", entities: ["Apollo"] });
+			const other = await mnemon.remember({ content: "Other note three" });
+			await mnemon.link({ sourceId: id, targetId: other.insight.id, edgeType: "causal" });
+			const entityPeers = async () =>
+				(await mnemon.related(id, { edgeType: "entity", maxDepth: 1 })).map((r) => r.id);
+			expect(await entityPeers()).toContain(peer.insight.id);
+
+			await mnemon.upsert({ id, content: "Managed note rewritten", entities: ["Hermes"] });
+			expect(await entityPeers()).not.toContain(peer.insight.id);
+			const causal = await mnemon.related(id, { edgeType: "causal", maxDepth: 1 });
+			expect(causal.map((r) => r.id)).toContain(other.insight.id);
+		});
+	});
+
+	it("embeds scoped and prepared texts before the transaction opens", async () => {
+		let inTransaction = false;
+		const calls: boolean[] = [];
+		const inner = new FakeEmbeddingProvider("fixture", 4, {
+			"document:prepared fact": unitVector(4, 0),
+			"query:prepared fact": unitVector(4, 0),
+		});
+		const provider = {
+			model: inner.model,
+			dimensions: inner.dimensions,
+			embed: (text: string, purpose: "document" | "query") => {
+				calls.push(inTransaction);
+				return inner.embed(text, purpose);
+			},
+		};
+		await withMnemon({ clock, embeddingProvider: provider }, async (mnemon, { client }) => {
+			await mnemon.remember({ content: "  prepared fact " });
+			await client.withAuthorization(
+				{ tenantId: TEST_TENANT, userId: null, namespace: TEST_NAMESPACE },
+				async (m) => {
+					inTransaction = true;
+					await m.recall({ query: "prepared fact" });
+					await m.recall({ query: "prepared fact", limit: 1 });
+				},
+				{ embed: [{ text: "prepared fact", purpose: "query" }] },
+			);
+			expect(calls).toEqual([false, false]);
+		});
+	});
+
+	it("records embedding settings even when the first writer rolls back", async () => {
+		const provider = new FakeEmbeddingProvider("fixture", 4, {
+			"first draft fact": unitVector(4, 0),
+			"second draft fact": unitVector(4, 1),
+			"committed fact": unitVector(4, 2),
+		});
+		await withMnemon({ clock, embeddingProvider: provider }, async (mnemon, { admin, client, schema }) => {
+			const settings = async () =>
+				(await admin.query<{ key: string }>(`SELECT key FROM ${schema}.settings ORDER BY key`)).rows;
+			await expect(
+				client.withAuthorization(
+					{ tenantId: TEST_TENANT, userId: null, namespace: TEST_NAMESPACE },
+					async (m) => {
+						await m.remember({ content: "first draft fact" });
+						await m.remember({ content: "second draft fact" });
+						throw new Error("abort");
+					},
+				),
+			).rejects.toThrow("abort");
+			expect(await settings()).toEqual([]);
+			await mnemon.remember({ content: "committed fact" });
+			expect(await settings()).toHaveLength(2);
+		});
+	});
+
 	it("forgets atomically and hides the insight from recall", async () => {
 		await withMnemon({ clock }, async (mnemon) => {
 			const added = await mnemon.remember({
@@ -627,6 +701,22 @@ describe.skipIf(!available)("postgres integration", () => {
 			expect(pruned.operations).toBe(1);
 			expect((await mnemon.log()).every((e) => e.createdAt >= cutoff.toISOString())).toBe(true);
 			expect((await mnemon.once("op-1", async () => 2)).value).toBe(2);
+		});
+	});
+
+	it("prunes at most limit rows of each kind per call", async () => {
+		await withMnemon({ clock }, async (mnemon) => {
+			clock.set(new Date("2024-01-01T00:00:00Z"));
+			for (const place of ["harbour", "station", "airport"]) {
+				const r = await mnemon.remember({ content: `the depot moved next to the ${place}` });
+				await mnemon.forget(r.insight.id);
+			}
+			clock.set(new Date("2024-03-01T00:00:00Z"));
+			const input = { forgottenBefore: new Date("2024-02-01T00:00:00Z"), limit: 2 };
+			expect((await mnemon.prune(input)).forgotten).toBe(2);
+			expect((await mnemon.prune(input)).forgotten).toBe(1);
+			expect((await mnemon.prune(input)).forgotten).toBe(0);
+			await expect(mnemon.prune({ ...input, limit: 0 })).rejects.toThrow(/limit/);
 		});
 	});
 

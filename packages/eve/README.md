@@ -347,7 +347,9 @@ const recent: RecallFilter = async ({ memories }) => memories.slice(0, 3).map((m
 
 If the filter throws, the turn gets the unfiltered memories and the recall
 event has `filterFailed: true`. The filter runs inside the per-operation
-record, so replays return the same messages without calling it again.
+record, so replays return the same messages without calling it again. That
+record is a database transaction: a pooled connection stays open while the
+filter runs, so give custom filters a timeout.
 
 ### propose_memory
 
@@ -630,8 +632,9 @@ For a gate backed by another model, reuse `gateState(input)` (the JSON state),
 - An HTTP error from `llmGate` throws `MnemonEveGateError`. The error carries
   only the status code, because the response body might echo the fact. The
   tool call fails, nothing is stored, and a retry runs again.
-- The gate runs outside any database transaction, so a slow gate does not
-  hold a pooled connection or block recall.
+- The gate and the embedding calls run outside any database transaction, so
+  a slow model does not hold a pooled connection or block recall. The recall
+  filter and core judges run inside one.
 - Any failure after the secret pre-filter emits a `proposal` event with
   status `error` and rethrows. Nothing is recorded, so a retry runs again.
 

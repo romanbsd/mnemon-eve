@@ -175,17 +175,20 @@ export interface MnemonStoreTx {
 	setEffectiveImportances(values: ReadonlyMap<string, number>): Promise<void>;
 	/** Sets embeddings only where still missing; returns how many were set. */
 	setMissingEmbeddings(values: ReadonlyMap<string, readonly number[]>): Promise<number>;
+	/** Returns true when both settings were already stored. */
 	establishEmbeddingSettings(
 		dimensions: number,
 		model: string,
 		at: Date,
-	): Promise<void>;
+	): Promise<boolean>;
+	deleteDerivedEdges(id: string): Promise<void>;
 	linkAndLog(edge: NewEdgeRecord, at: Date): Promise<EdgeRecord>;
 	forgetAndLog(id: string, at: Date): Promise<boolean>;
 	prune(input: {
 		oplogBefore?: Date;
 		operationsBefore?: Date;
 		forgottenBefore?: Date;
+		limit: number;
 	}): Promise<{ oplog: number; operations: number; forgotten: number }>;
 	incrementAccess(ids: readonly string[], at: Date, by?: number): Promise<void>;
 }
@@ -224,15 +227,24 @@ export class PostgresMnemonStore implements MnemonStore {
 	private readonly s: string;
 	private readonly client: PoolClient;
 
-	/** `client` must already be inside an authorized transaction. */
+	/**
+	 * `client` must already be inside an authorized transaction.
+	 * `vectorDimensions` casts vector search to the HNSW index's type.
+	 */
 	constructor(
 		client: PoolClient,
 		schema: string,
 		private readonly namespace: string,
+		vectorDimensions?: number,
 	) {
 		this.client = wrapQueries(client);
 		this.s = quoteIdent(schema);
+		this.vectorType = vectorDimensions
+			? `vector(${String(vectorDimensions)})`
+			: "vector";
 	}
+
+	private readonly vectorType: string;
 
 	async withTransaction<T>(fn: (tx: MnemonStoreTx) => Promise<T>): Promise<T> {
 		return withSavepoint(this.client, async (client) =>
@@ -329,14 +341,14 @@ export class PostgresMnemonStore implements MnemonStore {
 	): Promise<VectorHit[]> {
 		const result = await this.client.query<Record<string, unknown>>(
 			`
-      SELECT id, 1 - (embedding <=> $2::vector) AS cosine_similarity
+      SELECT id, 1 - (embedding::${this.vectorType} <=> $2::${this.vectorType}) AS cosine_similarity
       FROM ${this.s}.insights
       WHERE namespace = $1
         AND deleted_at IS NULL
         AND embedding IS NOT NULL
         AND ($3::uuid IS NULL OR id <> $3::uuid)
-        AND ($5::float8 IS NULL OR 1 - (embedding <=> $2::vector) >= $5)
-      ORDER BY embedding <=> $2::vector, id ASC
+        AND ($5::float8 IS NULL OR 1 - (embedding::${this.vectorType} <=> $2::${this.vectorType}) >= $5)
+      ORDER BY embedding::${this.vectorType} <=> $2::${this.vectorType}, id ASC
       LIMIT $4
       `,
 			[
@@ -365,8 +377,7 @@ export class PostgresMnemonStore implements MnemonStore {
       WITH
       q AS (
           SELECT $2::text[] AS tokens,
-                 cardinality($2::text[]) AS token_count,
-                 $3::vector AS embedding
+                 cardinality($2::text[]) AS token_count
       ),
       keyword_scored AS (
           SELECT i.id,
@@ -386,19 +397,21 @@ export class PostgresMnemonStore implements MnemonStore {
           ORDER BY score DESC, id ASC
           LIMIT $4
       ),
-      vector_ranked AS (
-          SELECT i.id,
-                 row_number() OVER (ORDER BY i.embedding <=> q.embedding, i.id ASC) AS rank
+      vector_nearest AS (
+          SELECT i.id, i.embedding::${this.vectorType} <=> $3::${this.vectorType} AS distance
           FROM ${this.s}.insights AS i
-          CROSS JOIN q
-          WHERE q.embedding IS NOT NULL
+          WHERE $3::vector IS NOT NULL
             AND i.namespace = $1
             AND i.deleted_at IS NULL
             AND i.embedding IS NOT NULL
-            AND 1 - (i.embedding <=> q.embedding) > ${VECTOR_ANCHOR_MIN_COSINE}
+            AND 1 - (i.embedding::${this.vectorType} <=> $3::${this.vectorType}) > ${VECTOR_ANCHOR_MIN_COSINE}
             AND ($5::text IS NULL OR i.source = $5)
-          ORDER BY i.embedding <=> q.embedding, i.id ASC
+          ORDER BY i.embedding::${this.vectorType} <=> $3::${this.vectorType}, i.id ASC
           LIMIT $4
+      ),
+      vector_ranked AS (
+          SELECT id, row_number() OVER (ORDER BY distance, id ASC) AS rank
+          FROM vector_nearest
       ),
       time_ranked AS (
           SELECT id, row_number() OVER (ORDER BY created_at DESC, id ASC) AS rank
@@ -737,12 +750,8 @@ export class PostgresMnemonStore implements MnemonStore {
             ON i.namespace = $1
            AND i.deleted_at IS NULL
            AND i.id <> $2::uuid
-           -- ponytail: case-insensitive match scans the namespace; a lower(entities) GIN index needs a schema migration.
-           AND EXISTS (
-                 SELECT 1
-                 FROM jsonb_array_elements_text(i.entities) AS stored
-                 WHERE lower(stored) = lower(e.entity)
-               )
+           -- Matches insights_entities_lower_gin_idx.
+           AND lower(i.entities::text)::jsonb @> jsonb_build_array(lower(e.entity))
       )
       SELECT 'latest' AS bucket, id, content, created_at, NULL::text AS entity, NULL::uuid AS target_id, NULL::int AS ord, NULL::int AS rn
       FROM latest
@@ -1160,6 +1169,14 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 		return this.upsertEdgeRows(deduped);
 	}
 
+	async deleteDerivedEdges(id: string): Promise<void> {
+		await this.client.query(
+			`DELETE FROM ${this.s}.edges
+       WHERE namespace = $1 AND derived AND (source_id = $2::uuid OR target_id = $2::uuid)`,
+			[this.namespace, id],
+		);
+	}
+
 	async deleteBackbone(a: string, b: string): Promise<void> {
 		await this.client.query(
 			`DELETE FROM ${this.s}.edges
@@ -1181,20 +1198,23 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 		const weights = edges.map((e) => e.weight);
 		const metas = edges.map((e) => JSON.stringify(e.metadata));
 		const created = edges.map((e) => e.createdAt);
+		const derived = edges.map((e) => e.derived ?? false);
 		const result = await this.client.query<Record<string, unknown>>(
 			`
-      INSERT INTO ${this.s}.edges (namespace, source_id, target_id, edge_type, weight, metadata, created_at)
+      INSERT INTO ${this.s}.edges (namespace, source_id, target_id, edge_type, weight, metadata, created_at, derived)
       SELECT $1, edge_rows.*
-      FROM unnest($2::uuid[], $3::uuid[], $4::text[], $5::float8[], $6::jsonb[], $7::timestamptz[])
-        AS edge_rows(source_id, target_id, edge_type, weight, metadata, created_at)
+      FROM unnest($2::uuid[], $3::uuid[], $4::text[], $5::float8[], $6::jsonb[], $7::timestamptz[], $8::boolean[])
+        AS edge_rows(source_id, target_id, edge_type, weight, metadata, created_at, derived)
       ON CONFLICT (tenant_id, namespace, source_id, target_id, edge_type)
       DO UPDATE SET
           weight = EXCLUDED.weight,
           metadata = EXCLUDED.metadata,
-          created_at = EXCLUDED.created_at
+          created_at = EXCLUDED.created_at,
+          -- An explicit link stays explicit.
+          derived = ${this.s}.edges.derived AND EXCLUDED.derived
       RETURNING *
       `,
-			[this.namespace, sourceIds, targetIds, types, weights, metas, created],
+			[this.namespace, sourceIds, targetIds, types, weights, metas, created, derived],
 		);
 		return result.rows.map((row) => mapEdgeRow(row));
 	}
@@ -1256,7 +1276,7 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 		dimensions: number,
 		model: string,
 		at: Date,
-	): Promise<void> {
+	): Promise<boolean> {
 		// Plain read first: once both settings exist, writers take no row lock.
 		const read = () =>
 			this.client.query<Record<string, unknown>>(
@@ -1266,7 +1286,8 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
       `,
 			);
 		let dim = await read();
-		if (dim.rows[0]?.dimensions == null || dim.rows[0].model == null) {
+		const stored = dim.rows[0]?.dimensions != null && dim.rows[0].model != null;
+		if (!stored) {
 			await this.client.query(
 				`
         INSERT INTO ${this.s}.settings (key, value, updated_at)
@@ -1278,17 +1299,18 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 			);
 			dim = await read();
 		}
-		const stored = dim.rows[0];
-		if (Number(stored?.dimensions) !== dimensions) {
+		const row = dim.rows[0];
+		if (Number(row?.dimensions) !== dimensions) {
 			throw new MnemonConfigurationError(
-				`embedding dimension mismatch: store has ${String(stored?.dimensions)}, got ${dimensions}`,
+				`embedding dimension mismatch: store has ${String(row?.dimensions)}, got ${dimensions}`,
 			);
 		}
-		if (String(stored?.model) !== model) {
+		if (String(row?.model) !== model) {
 			throw new MnemonConfigurationError(
-				`embedding model mismatch: store has ${String(stored?.model)}, got ${model}`,
+				`embedding model mismatch: store has ${String(row?.model)}, got ${model}`,
 			);
 		}
+		return stored;
 	}
 
 	async linkAndLog(edge: NewEdgeRecord, at: Date): Promise<EdgeRecord> {
@@ -1358,17 +1380,22 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
 		oplogBefore?: Date;
 		operationsBefore?: Date;
 		forgottenBefore?: Date;
+		limit: number;
 	}): Promise<{ oplog: number; operations: number; forgotten: number }> {
 		const count = async (sql: string, cutoff: Date | undefined) =>
 			cutoff
-				? ((await this.client.query(sql, [this.namespace, cutoff])).rowCount ?? 0)
+				? ((await this.client.query(sql, [this.namespace, cutoff, input.limit])).rowCount ?? 0)
 				: 0;
 		const oplog = await count(
-			`DELETE FROM ${this.s}.oplog WHERE namespace = $1 AND created_at < $2`,
+			`DELETE FROM ${this.s}.oplog WHERE id IN (
+				SELECT id FROM ${this.s}.oplog WHERE namespace = $1 AND created_at < $2 LIMIT $3
+			)`,
 			input.oplogBefore,
 		);
 		const operations = await count(
-			`DELETE FROM ${this.s}.operations WHERE namespace = $1 AND created_at < $2`,
+			`DELETE FROM ${this.s}.operations WHERE namespace = $1 AND key IN (
+				SELECT key FROM ${this.s}.operations WHERE namespace = $1 AND created_at < $2 LIMIT $3
+			)`,
 			input.operationsBefore,
 		);
 		// Kept op-log entries lose their link to a deleted memory, not the entry.
@@ -1377,6 +1404,7 @@ class PostgresMnemonStoreTx implements MnemonStoreTx {
       WITH gone AS (
         SELECT id FROM ${this.s}.insights
         WHERE namespace = $1 AND deleted_at < $2
+        LIMIT $3
       ),
       unlinked AS (
         UPDATE ${this.s}.oplog SET insight_id = NULL

@@ -26,12 +26,15 @@ export const KEEP_ACCESS_BOOST = RETENTION_IMMUNE_ACCESS;
 export const MAX_LIST_LIMIT = 10_000;
 export const DEFAULT_LOG_LIMIT = 50;
 export const MAX_LOG_LIMIT = 500;
+export const DEFAULT_PRUNE_LIMIT = 1_000;
 
 export const SEARCH_KEYWORD_WEIGHT = 0.45;
 export const SEARCH_FTS_WEIGHT = 0.55;
 export const RRF_K = 60;
 export const ANCHOR_TOP_K = 20;
 export const VECTOR_ANCHOR_MIN_COSINE = 0.1;
+/** pgvector's HNSW limit for the `vector` type. */
+export const HNSW_MAX_DIMENSIONS = 2000;
 export const SEMANTIC_CANDIDATE_MIN_COSINE = 0.4;
 export const SEMANTIC_EDGE_MIN_COSINE = 0.8;
 export const DUPLICATE_TOKEN_SIMILARITY = 0.9;

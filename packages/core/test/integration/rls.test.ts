@@ -210,6 +210,42 @@ describe.skipIf(!available)("row-level security", () => {
 		}
 	});
 
+	it("upgrades a v1 schema in place", async () => {
+		const admin = adminPool();
+		const schema = uniqueSchema();
+		const s = quoteIdent(schema);
+		try {
+			await runMigrations(admin, schema);
+			// Roll back to the 0.1.0 shape.
+			await admin.query(`ALTER TABLE ${s}.edges DROP COLUMN derived`);
+			await admin.query(`DROP INDEX ${s}.insights_entities_lower_gin_idx`);
+			await admin.query(`DELETE FROM ${s}.schema_migrations WHERE version = 2`);
+
+			expect(await runMigrations(admin, schema)).toBe(2);
+			const found = await admin.query(
+				`SELECT to_regclass($1) IS NOT NULL AS index,
+				        EXISTS (SELECT 1 FROM information_schema.columns
+				                WHERE table_schema = $2 AND table_name = 'edges' AND column_name = 'derived') AS column`,
+				[`${s}.insights_entities_lower_gin_idx`, schema],
+			);
+			expect(found.rows[0]).toEqual({ index: true, column: true });
+		} finally {
+			await admin.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`).catch(() => {});
+			await admin.end();
+		}
+	});
+
+	it("creates the HNSW index for the provider's dimensions", async () => {
+		const provider = new FakeEmbeddingProvider("fixture", 4, {});
+		await withMnemon({ clock, embeddingProvider: provider }, async (_m, { admin, schema }) => {
+			const index = await admin.query<{ def: string }>(
+				"SELECT pg_get_indexdef($1::regclass) AS def",
+				[`${quoteIdent(schema)}.insights_embedding_hnsw_idx`],
+			);
+			expect(index.rows[0]?.def).toMatch(/hnsw \(\(\(embedding\)::vector\(4\)\) vector_cosine_ops\)/);
+		});
+	});
+
 	it("installs the user-scope policy idempotently", async () => {
 		const admin = adminPool();
 		const schema = uniqueSchema();

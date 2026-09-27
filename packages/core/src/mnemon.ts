@@ -9,11 +9,14 @@ import {
 	type ResolvedConfig,
 	resolveConfig,
 } from "./config.js";
+import type { EmbeddingProvider } from "./embedding-provider.js";
 import { makeBriefExcerpt } from "./engine/brief.js";
 import {
 	ALGORITHM_VERSION,
 	ANCHOR_TOP_K,
 	DEDUP_CANDIDATE_LIMIT,
+	HNSW_MAX_DIMENSIONS,
+	MAX_CONTENT_CODE_POINTS,
 	DEFAULT_RELATED_DEPTH,
 	DEFAULT_RELATED_LIMIT,
 	KEEP_ACCESS_BOOST,
@@ -48,7 +51,11 @@ import {
 	mergeEntities,
 } from "./engine/entities.js";
 import { detectIntent } from "./engine/intent.js";
-import { contentHash, normalizeContent } from "./engine/normalize.js";
+import {
+	codePointLength,
+	contentHash,
+	normalizeContent,
+} from "./engine/normalize.js";
 import {
 	causalTopologicalOrder,
 	compareRecallHits,
@@ -81,6 +88,7 @@ import {
 import {
 	assertRlsEnforced,
 	ensureUserScopePolicy,
+	ensureVectorIndex,
 	runMigrations,
 } from "./postgres/migrations.js";
 import { toPublicEdge, toPublicInsight } from "./postgres/row-mappers.js";
@@ -103,6 +111,7 @@ import {
 	type ListInput,
 	type LogInput,
 	type ManagedInsightInput,
+	type AuthorizationOptions,
 	type Mnemon,
 	type MnemonAuthorization,
 	type MnemonClient,
@@ -161,9 +170,21 @@ class PostgresMnemonClient implements MnemonClient {
 	private initPromise: Promise<void> | undefined;
 	private closed = false;
 
+	/** Set once the store's embedding settings are known to match; they never change. */
+	private readonly embeddingSettings = { confirmed: false };
+
+	/** Set when vector search runs on the HNSW index. */
+	private readonly vectorDimensions: number | undefined;
+
 	constructor(private readonly config: ResolvedConfig) {
 		this.ownsPool = config.pool === undefined;
 		this.pool = config.pool ?? new Pool({ connectionString: config.databaseUrl });
+		const dimensions = config.embeddingProvider?.dimensions;
+		// ponytail: HNSW on `vector` stops at 2000 dimensions; larger models scan. halfvec would reach 4000.
+		this.vectorDimensions =
+			dimensions !== undefined && dimensions <= HNSW_MAX_DIMENSIONS
+				? dimensions
+				: undefined;
 	}
 
 	async initialize(): Promise<void> {
@@ -185,6 +206,15 @@ class PostgresMnemonClient implements MnemonClient {
 					throw wrapDatabaseError(error);
 				},
 			);
+		}
+		if (this.vectorDimensions !== undefined) {
+			await ensureVectorIndex(
+				this.pool,
+				this.config.schema,
+				this.vectorDimensions,
+			).catch((error: unknown) => {
+				throw wrapDatabaseError(error);
+			});
 		}
 		if (this.config.embeddingProvider) {
 			await this.checkStoreSetting(
@@ -224,12 +254,14 @@ class PostgresMnemonClient implements MnemonClient {
 	async withAuthorization<T>(
 		authorization: MnemonAuthorization,
 		fn: (mnemon: Mnemon) => Promise<T>,
+		options?: AuthorizationOptions,
 	): Promise<T> {
 		const auth = validateAuthorization(authorization);
 		if (this.closed) {
 			throw new MnemonConfigurationError("mnemon is closed");
 		}
 		await this.initialize();
+		const prepared = await this.prepareEmbeddings(options?.embed ?? []);
 		// Caller errors must surface unchanged; withTransaction only masks
 		// driver errors. Box them through the rollback and unbox after.
 		const boxed = { error: undefined as unknown, failed: false };
@@ -242,12 +274,25 @@ class PostgresMnemonClient implements MnemonClient {
 					"SELECT set_config('mnemon.tenant_id', $1, true), set_config('mnemon.user_id', $2, true)",
 					[auth.tenantId, auth.userId ?? ""],
 				);
+				if (this.vectorDimensions !== undefined) {
+					// Filtered HNSW scans keep going until LIMIT rows pass RLS and namespace.
+					await client.query(
+						"SELECT set_config('hnsw.iterative_scan', 'strict_order', true)",
+					);
+				}
 				try {
 					return await fn(
 						new MnemonService(
 							this.config,
-							new PostgresMnemonStore(client, this.config.schema, auth.namespace),
+							new PostgresMnemonStore(
+								client,
+								this.config.schema,
+								auth.namespace,
+								this.vectorDimensions,
+							),
 							auth.namespace,
+							prepared,
+							this.embeddingSettings,
 						),
 					);
 				} catch (error) {
@@ -267,11 +312,37 @@ class PostgresMnemonClient implements MnemonClient {
 		const view = {} as Record<string, unknown>;
 		for (const method of SCOPED_METHODS) {
 			view[method] = (...args: unknown[]) =>
-				this.withAuthorization(authorization, (m) =>
-					(m[method] as (...a: unknown[]) => Promise<unknown>)(...args),
+				this.withAuthorization(
+					authorization,
+					(m) => (m[method] as (...a: unknown[]) => Promise<unknown>)(...args),
+					{ embed: embedRequests(method, args[0]) },
 				);
 		}
 		return view as unknown as Mnemon;
+	}
+
+	/** Embeds before BEGIN so no transaction idles on the provider. */
+	private async prepareEmbeddings(
+		requests: readonly EmbedRequest[],
+	): Promise<Map<string, number[]>> {
+		const prepared = new Map<string, number[]>();
+		const provider = this.config.embeddingProvider;
+		if (!provider) {
+			return prepared;
+		}
+		for (const { text, purpose } of requests) {
+			const trimmed = text.trim();
+			const length = codePointLength(trimmed);
+			// Invalid text fails validation inside, not as an embedding error here.
+			if (length === 0 || length > MAX_CONTENT_CODE_POINTS) {
+				continue;
+			}
+			const key = embeddingKey(trimmed, purpose);
+			if (!prepared.has(key)) {
+				prepared.set(key, await embedWith(provider, trimmed, purpose));
+			}
+		}
+		return prepared;
 	}
 
 	private async registerVectorTypes(client: PoolClient): Promise<void> {
@@ -298,7 +369,11 @@ class MnemonService implements Mnemon {
 		private readonly config: ResolvedConfig,
 		private readonly store: MnemonStore,
 		private readonly namespace: string,
+		private readonly prepared: ReadonlyMap<string, number[]> = new Map(),
+		private readonly embeddingSettings = { confirmed: false },
 	) {}
+
+	private insertedEmbeddingSettings = false;
 
 	async once<T>(
 		key: string,
@@ -464,6 +539,23 @@ class MnemonService implements Mnemon {
 		return { record, generated };
 	}
 
+	// Only settings committed before this transaction are cached: its own
+	// insert is visible to later reads here but could still roll back.
+	private async establishEmbeddingSettings(
+		tx: MnemonStoreTx,
+		provider: EmbeddingProvider,
+		now: Date,
+	): Promise<void> {
+		if (this.embeddingSettings.confirmed) return;
+		const stored = await tx.establishEmbeddingSettings(
+			provider.dimensions,
+			provider.model,
+			now,
+		);
+		if (!stored) this.insertedEmbeddingSettings = true;
+		else if (!this.insertedEmbeddingSettings) this.embeddingSettings.confirmed = true;
+	}
+
 	/** Writes the record (managed ones upsert) and its edges, then scores it. */
 	private async persistRecord(
 		tx: MnemonStoreTx,
@@ -472,11 +564,7 @@ class MnemonService implements Mnemon {
 		now: Date,
 	) {
 		if (record.embedding && this.config.embeddingProvider) {
-			await tx.establishEmbeddingSettings(
-				this.config.embeddingProvider.dimensions,
-				this.config.embeddingProvider.model,
-				now,
-			);
+			await this.establishEmbeddingSettings(tx, this.config.embeddingProvider, now);
 		}
 		const insight = record.managed
 			? await tx.upsertManagedInsight(record)
@@ -494,8 +582,12 @@ class MnemonService implements Mnemon {
 		if (previous && next) {
 			await tx.deleteBackbone(previous, next);
 		}
+		if (record.managed) {
+			// Replaced content: edges derived from the old version are stale.
+			await tx.deleteDerivedEdges(record.id);
+		}
 		const edges = await tx.upsertEdges(
-			generated.map((edge) => ({ ...edge, createdAt: now })),
+			generated.map((edge) => ({ ...edge, createdAt: now, derived: true })),
 		);
 		const ei = effectiveImportance({
 			importance: insight.importance,
@@ -869,11 +961,7 @@ class MnemonService implements Mnemon {
 		const now = this.config.clock.now();
 		const embedded = await this.store.withTransaction(async (tx) => {
 			if (vectors.size > 0) {
-				await tx.establishEmbeddingSettings(
-					provider.dimensions,
-					provider.model,
-					now,
-				);
+				await this.establishEmbeddingSettings(tx, provider, now);
 			}
 			const count = await tx.setMissingEmbeddings(vectors);
 			if (count > 0) {
@@ -890,8 +978,8 @@ class MnemonService implements Mnemon {
 	}
 
 	async prune(input: PruneInput): Promise<PruneResult> {
-		validatePruneInput(input);
-		return this.store.withTransaction((tx) => tx.prune(input));
+		const pruneInput = validatePruneInput(input);
+		return this.store.withTransaction((tx) => tx.prune(pruneInput));
 	}
 
 	async keep(id: string): Promise<Insight> {
@@ -969,17 +1057,10 @@ class MnemonService implements Mnemon {
 				"embedding provider is not configured",
 			);
 		}
-		try {
-			const vector = await provider.embed(text, purpose);
-			return validateEmbedding(vector, provider.dimensions);
-		} catch (error) {
-			if (error instanceof MnemonEmbeddingError) {
-				throw error;
-			}
-			throw new MnemonEmbeddingError("embedding provider failed", {
-				cause: error,
-			});
-		}
+		return (
+			this.prepared.get(embeddingKey(text, purpose)) ??
+			embedWith(provider, text, purpose)
+		);
 	}
 
 	private async judgeDiff(
@@ -1205,4 +1286,43 @@ function flatMapJoined<T extends { id: string }, R>(
 		}
 	}
 	return out;
+}
+
+type EmbedRequest = NonNullable<AuthorizationOptions["embed"]>[number];
+
+function embeddingKey(text: string, purpose: EmbedRequest["purpose"]): string {
+	return `${purpose}\0${text}`;
+}
+
+async function embedWith(
+	provider: EmbeddingProvider,
+	text: string,
+	purpose: EmbedRequest["purpose"],
+): Promise<number[]> {
+	try {
+		const vector = await provider.embed(text, purpose);
+		return validateEmbedding(vector, provider.dimensions);
+	} catch (error) {
+		if (error instanceof MnemonEmbeddingError) {
+			throw error;
+		}
+		throw new MnemonEmbeddingError("embedding provider failed", {
+			cause: error,
+		});
+	}
+}
+
+/** The texts a scoped call will embed, so they are embedded before BEGIN. */
+function embedRequests(method: string, input: unknown): EmbedRequest[] {
+	if (typeof input !== "object" || input === null) {
+		return [];
+	}
+	const { content, query } = input as { content?: unknown; query?: unknown };
+	if ((method === "remember" || method === "upsert") && typeof content === "string") {
+		return [{ text: content, purpose: "document" }];
+	}
+	if (method === "recall" && typeof query === "string") {
+		return [{ text: query, purpose: "query" }];
+	}
+	return [];
 }

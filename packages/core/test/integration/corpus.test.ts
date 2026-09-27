@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { EDGE_TYPES } from "../../src/types.js";
 import { FakeClock } from "../fake-clock.js";
 import { FakeEmbeddingProvider } from "../fake-embedding-provider.js";
 import { postgresAvailable, withMnemon } from "./helpers.js";
@@ -76,6 +77,7 @@ describe.skipIf(!available)("deterministic corpus", () => {
 
 			let expectedHits = 0;
 			let top5Hits = 0;
+			const vias = new Set<string>();
 			for (const q of queries.queries) {
 				const recalled = await mnemon.recall({
 					query: q.query,
@@ -83,6 +85,7 @@ describe.skipIf(!available)("deterministic corpus", () => {
 					limit: 10,
 				});
 				const keys = recalled.results.map((r) => idToKey.get(r.insight.id));
+				for (const r of recalled.results) vias.add(r.matchedVia);
 				expect(keys).not.toContain("soft-delete-me");
 				for (const exp of q.expected) {
 					expectedHits++;
@@ -110,6 +113,8 @@ describe.skipIf(!available)("deterministic corpus", () => {
 				);
 			}
 			expect(top5Hits / expectedHits).toBeGreaterThanOrEqual(0.9);
+			const anchorVias = ["keyword", "vector", "time", "hybrid"];
+			expect([...vias].filter((v) => ![...anchorVias, ...EDGE_TYPES].includes(v))).toEqual([]);
 		});
 	}, 30_000);
 

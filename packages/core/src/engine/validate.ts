@@ -11,6 +11,7 @@ import {
 	DEFAULT_BRIEF_EXCERPT_CHARS,
 	DEFAULT_LIST_LIMIT,
 	DEFAULT_LOG_LIMIT,
+	DEFAULT_PRUNE_LIMIT,
 	DEFAULT_RETENTION_LIMIT,
 	DEFAULT_RETENTION_THRESHOLD,
 	DEFAULT_SEARCH_LIMIT,
@@ -412,12 +413,18 @@ function validateCategoryFilter(category: InsightCategory | undefined): void {
 	}
 }
 
-export function validatePruneInput(input: {
+export function validatePruneInput(input?: {
 	oplogBefore?: Date;
 	operationsBefore?: Date;
 	forgottenBefore?: Date;
-}): void {
-	const dates = [input.oplogBefore, input.operationsBefore, input.forgottenBefore];
+	limit?: number;
+}): {
+	oplogBefore?: Date;
+	operationsBefore?: Date;
+	forgottenBefore?: Date;
+	limit: number;
+} {
+	const dates = [input?.oplogBefore, input?.operationsBefore, input?.forgottenBefore];
 	if (dates.every((d) => d === undefined)) {
 		fail("prune", "invalid", "prune needs oplogBefore, operationsBefore, or forgottenBefore");
 	}
@@ -426,6 +433,12 @@ export function validatePruneInput(input: {
 			fail("prune", "invalid", "prune cutoffs must be valid Dates");
 		}
 	}
+	return {
+		oplogBefore: input?.oplogBefore,
+		operationsBefore: input?.operationsBefore,
+		forgottenBefore: input?.forgottenBefore,
+		limit: requireLimit(input?.limit ?? DEFAULT_PRUNE_LIMIT, MAX_LIST_LIMIT),
+	};
 }
 
 export function validateRetentionInput(input?: {
@@ -433,8 +446,8 @@ export function validateRetentionInput(input?: {
 	limit?: number;
 }): { threshold: number; limit: number } {
 	const threshold = input?.threshold ?? DEFAULT_RETENTION_THRESHOLD;
-	if (!Number.isFinite(threshold) || threshold < 0) {
-		fail("threshold", "out_of_range", "threshold must be a finite number >= 0");
+	if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+		fail("threshold", "out_of_range", "threshold must be a number between 0 and 1");
 	}
 	return {
 		threshold,

@@ -184,6 +184,8 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 								recallCharBudget,
 							);
 						}),
+					// Embedded before the transaction opens.
+					{ embed: query ? [{ text: query, purpose: "query" }] : [] },
 				);
 				emit({
 					type: "recall",
@@ -249,21 +251,26 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 						try {
 							// Short transaction: return a stored result, or fetch what the
 							// gate needs. The gate then runs with no connection held.
-							const peek = await client.withAuthorization(scope.auth, async (tx) => {
-								try {
-									return await tx.once(key, async (m) => {
-										const related = await m.recall({
-											query: clip(candidate, MAX_QUERY_CHARS),
-											limit: relatedLimit,
+							const relatedQuery = clip(candidate, MAX_QUERY_CHARS);
+							const peek = await client.withAuthorization(
+								scope.auth,
+								async (tx) => {
+									try {
+										return await tx.once(key, async (m) => {
+											const related = await m.recall({
+												query: relatedQuery,
+												limit: relatedLimit,
+											});
+											// ponytail: throwing skips recording; the sentinel carries the hits out.
+											throw new NotRecorded(related.results);
 										});
-										// ponytail: throwing skips recording; the sentinel carries the hits out.
-										throw new NotRecorded(related.results);
-									});
-								} catch (error) {
-									if (error instanceof NotRecorded) return error;
-									throw error;
-								}
-							});
+									} catch (error) {
+										if (error instanceof NotRecorded) return error;
+										throw error;
+									}
+								},
+								{ embed: [{ text: relatedQuery, purpose: "query" }] },
+							);
 							if (!(peek instanceof NotRecorded)) {
 								const value = peek.value as ProposalResult;
 								report(value.status, value, true);
@@ -322,6 +329,7 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 										...(superseded.length ? { superseded } : {}),
 									};
 								}),
+								{ embed: decision.accept ? [{ text: candidate, purpose: "document" }] : [] },
 							);
 							report(outcome.value.status, outcome.value, outcome.replayed);
 							return outcome.value;

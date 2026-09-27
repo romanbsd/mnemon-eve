@@ -9,7 +9,7 @@ PostgreSQL row-level security (RLS).
 - **Remember** extracts entities, links new memories into a temporal,
   semantic, entity, and causal graph, and detects duplicates and conflicts.
 - **Tenancy**: every operation runs in a transaction whose tenant is enforced
-  by PostgreSQL. Per-user enforcement is optional.
+  by PostgreSQL, and so is per-user isolation (on by default).
 - **Idempotency**: `once(key, fn)` gives exactly-once writes under replay.
 
 Using [Eve](https://github.com/vercel/eve)? See [`@romanbsd/mnemon-eve`](../eve).
@@ -32,7 +32,8 @@ Using [Eve](https://github.com/vercel/eve)? See [`@romanbsd/mnemon-eve`](../eve)
 
 - Node.js 24+
 - PostgreSQL with the [`vector`](https://github.com/pgvector/pgvector)
-  extension available (tested on PostgreSQL 18 + pgvector 0.8)
+  extension available (tested on PostgreSQL 18 + pgvector 0.8; 0.8+ is
+  required with an embedding provider)
 - A database role that is **not** a superuser and does **not** have
   `BYPASSRLS` (see [Database roles](#database-roles))
 
@@ -108,7 +109,11 @@ indexes, and RLS policies.
 ```ts
 interface MnemonClient {
   initialize(): Promise<void>;
-  withAuthorization<T>(auth: MnemonAuthorization, fn: (m: Mnemon) => Promise<T>): Promise<T>;
+  withAuthorization<T>(
+    auth: MnemonAuthorization,
+    fn: (m: Mnemon) => Promise<T>,
+    options?: { embed?: { text: string; purpose: "document" | "query" }[] },
+  ): Promise<T>;
   scope(auth: MnemonAuthorization): Mnemon;
   close(): Promise<void>;
 }
@@ -125,6 +130,17 @@ interface MnemonAuthorization {
 - `withAuthorization(auth, fn)` runs several calls in one transaction. They
   commit together, or all roll back if `fn` throws. Errors thrown by `fn`
   propagate unchanged.
+
+The transaction stays open while `fn` awaits anything, including the embedding
+provider and [judges](#judges). `scope()` embeds a call's `content` or `query`
+before the transaction opens. With `withAuthorization`, pass the texts `fn`
+will remember (`"document"`) or recall (`"query"`) in `options.embed` for the
+same effect; other texts are embedded inside the transaction. Judges always
+run inside it. So:
+
+- size the pool for concurrent requests times provider latency;
+- give providers and judges timeouts (the built-in providers default to 10 s);
+- consider `idle_in_transaction_session_timeout` on the app role as a backstop.
 
 Identifiers must be non-empty, have no leading or trailing whitespace, and be
 at most 1024 characters (namespace: 200). Invalid values throw
@@ -189,7 +205,10 @@ suggestion and causal edges come from heuristics unless you configure
 
 #### upsert
 
-Mirror records you own (tickets, documents) under a stable UUID:
+Mirror records you own (tickets, documents) under a stable UUID. An upsert
+replaces the edges derived from the previous version; links made with `link`
+stay. `remember` never merges into an upserted record, even with
+`deduplicate: true`.
 
 ```ts
 await memory.upsert({
@@ -214,7 +233,7 @@ const { results, meta } = await memory.recall({
 
 results[0].insight;    // full Insight
 results[0].signals;    // { keyword, entity, similarity, graph }
-results[0].matchedVia; // "keyword" | "vector" | "fts" | "hybrid" | "causal" | ...
+results[0].matchedVia; // "keyword" | "vector" | "time" | "hybrid" | "causal" | ...
 meta.hint;             // "sparse_results" when little matched
 ```
 
@@ -232,6 +251,8 @@ await memory.status(); // { namespace, insights, embeddings, edges, embeddingMod
 
 `source` narrows where recall starts; `category` filters what it returns, so a
 match can still lead to related memories of that category through the graph.
+Full-text search covers `content` only; tags and entities match through
+keyword and entity signals.
 
 #### Retention
 
@@ -239,8 +260,9 @@ Memories decay: effective importance (0–1) starts at 0.15, 0.3, 0.5, 0.8, or
 1 for importance 1–5, halves every 30 days since last access, and is boosted
 by access count and edges. `retentionCandidates` lists the weakest ones for
 review. It never deletes anything, and memories with importance 4+ or 3+
-accesses are immune. Recall counts as an access, so memories recalled in
-three turns never become candidates.
+accesses are immune. Only `recall` and `keep` count as accesses; `get`,
+`search`, `list`, and `related` do not. So memories recalled in three turns
+never become candidates.
 
 With the default threshold of 0.25, an unlinked memory becomes a candidate
 immediately at importance 1, after about 8 days without access at importance
@@ -277,6 +299,12 @@ const { oplog, operations, forgotten } = await memory.prune({
   forgottenBefore: new Date(Date.now() - 30 * day),  // permanently delete tombstones
 });
 ```
+
+Each call deletes at most `limit` rows of each kind (default 1000, max
+10000) in one short transaction. Call it again while any count equals the
+limit; a first run over a large backlog takes several calls. `oplogBefore`
+and `forgottenBefore` compare against times from the configured `clock`;
+`operationsBefore` compares against the database clock.
 
 Each cutoff is optional, but at least one is required. It runs per
 namespace, under the same tenant and user as any other call. With the user
@@ -433,8 +461,13 @@ GRANT INSERT ON mnemon.settings TO app;
 ```
 
 `initialize()` issues no DDL against a schema that is already migrated, so the
-app role needs no `CREATE` privilege. To record the embedding model during
-deploy, pass the same `embeddingProvider` to the owner's `createMnemon`.
+app role needs no `CREATE` privilege. Pass the same `embeddingProvider` to the
+owner's `createMnemon`: that records the embedding model and creates the
+vector index during deploy.
+
+A schema created by 0.1.0 upgrades in place on the owner's next
+`initialize()`: it adds the `edges.derived` column and an index. Edges from
+before the upgrade count as explicit links, so an `upsert` never removes them.
 
 ## Embeddings
 
@@ -460,6 +493,20 @@ do {
 A provider error throws and writes nothing from that batch, so a rerun picks up
 where it stopped. `status().embeddings` shows coverage. Backfilled memories get
 vectors but not the semantic edges `remember` would have created.
+
+With a provider of at most 2000 dimensions, `initialize()` creates an HNSW
+index on the embeddings (cosine), so vector search is approximate rather than
+exact. Search keeps scanning the index until enough rows pass the tenant, user,
+and namespace filters (`hnsw.iterative_scan`). Larger models are searched by
+sequential scan. On a large existing store, `initialize()` builds the index
+once and blocks writes meanwhile; to avoid that, create it beforehand as the
+owner:
+
+```sql
+CREATE INDEX CONCURRENTLY insights_embedding_hnsw_idx ON mnemon.insights
+  USING hnsw ((embedding::vector(768)) vector_cosine_ops)
+  WHERE deleted_at IS NULL AND embedding IS NOT NULL;
+```
 
 Built-in HTTP providers:
 
@@ -596,8 +643,8 @@ const mnemon = createMnemon({ databaseUrl, diffJudge, causalJudge });
   `none` and invalid entries create no edge.
 - Ids a judge omits keep the heuristic suggestion (diff) or get no edge
   (causal).
-- Judges run outside the write transaction, only when there is something to
-  compare. The diff judge is skipped when a memory is skipped as a duplicate.
+- Judges run before the insert, only when there is something to compare,
+  but inside the caller's transaction (see [Client](#client)). The diff judge is skipped when a memory is skipped as a duplicate.
 - If a judge throws, the heuristic result is used and the write succeeds.
 - Content passed to a judge is user data. Judges must not follow instructions
   inside it.
@@ -615,6 +662,9 @@ All errors extend `MnemonError`.
 | `MnemonNotFoundError` | `link` or `related` references a missing memory. |
 
 ## Maintenance
+
+[`prune()`](#pruning) works on one tenant and namespace at a time. To prune
+across all of them, run SQL as the owner role.
 
 Stored `once` results accumulate in `operations`. Prune them on a schedule
 longer than any retry or replay window:

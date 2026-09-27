@@ -132,7 +132,7 @@ export interface RecallHit {
 	insight: Insight;
 	score: number;
 	intent: RecallIntent;
-	matchedVia: "keyword" | "vector" | "time" | "fts" | "hybrid" | EdgeType;
+	matchedVia: "keyword" | "vector" | "time" | "hybrid" | EdgeType;
 	signals: RecallSignals;
 	/** Present when `RecallInput.brief` is true. Full text is available via `get(id)`. */
 	excerpt?: string;
@@ -185,15 +185,21 @@ export interface RetentionInput {
 }
 
 export interface PruneInput {
-	/** Delete op-log entries created before this time. */
+	/** Delete op-log entries created before this time (configured `clock`). */
 	oplogBefore?: Date;
 	/**
-	 * Delete `once` records created before this time (database clock); their
-	 * keys run again. Keep them longer than any replay window.
+	 * Delete `once` records created before this time (database clock, not the
+	 * configured `clock`); their keys run again. Keep them longer than any
+	 * replay window.
 	 */
 	operationsBefore?: Date;
-	/** Permanently delete memories forgotten before this time. */
+	/** Permanently delete memories forgotten before this time (configured `clock`). */
 	forgottenBefore?: Date;
+	/**
+	 * Maximum rows deleted per kind in this call. Default 1000, max 10000.
+	 * Call again while any count in the result equals `limit`.
+	 */
+	limit?: number;
 }
 
 export interface PruneResult {
@@ -322,6 +328,16 @@ export interface Mnemon {
 	once<T>(key: string, fn: (mnemon: Mnemon) => Promise<T>): Promise<OnceResult<T>>;
 }
 
+export interface AuthorizationOptions {
+	/**
+	 * Texts `fn` will embed, embedded before the transaction opens so it does
+	 * not stay open during the provider call. Pass them exactly as given to
+	 * `remember`/`upsert` (`"document"`) or `recall` (`"query"`); others are
+	 * embedded inside the transaction as usual.
+	 */
+	embed?: readonly { text: string; purpose: "document" | "query" }[];
+}
+
 export interface MnemonClient {
 	/** Runs migrations and RLS checks. Called lazily by other methods. */
 	initialize(): Promise<void>;
@@ -332,6 +348,7 @@ export interface MnemonClient {
 	withAuthorization<T>(
 		authorization: MnemonAuthorization,
 		fn: (mnemon: Mnemon) => Promise<T>,
+		options?: AuthorizationOptions,
 	): Promise<T>;
 	/** Convenience view where every call runs in its own authorized transaction. */
 	scope(authorization: MnemonAuthorization): Mnemon;

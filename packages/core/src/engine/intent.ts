@@ -9,10 +9,13 @@ import {
 
 // One alternation per list, like Go's regexp: matches never overlap, so
 // "tell me about" counts once, not also as "about".
-function termPattern(terms: readonly string[]): RegExp {
+export function termPattern(terms: readonly string[]): RegExp {
 	const ascii = terms.filter((t) => /^[\x20-\x7e]+$/.test(t));
 	const other = terms.filter((t) => !ascii.includes(t));
-	return new RegExp(`\\b(?:${ascii.join("|")})\\b|${other.join("|")}`, "g");
+	// An empty alternative would match everywhere, so leave empty lists out.
+	const parts = [...other];
+	if (ascii.length > 0) parts.unshift(`\\b(?:${ascii.join("|")})\\b`);
+	return new RegExp(parts.join("|"), "g");
 }
 
 const WHY = termPattern(WHY_TERMS);

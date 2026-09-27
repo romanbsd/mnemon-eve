@@ -1,10 +1,10 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 import { quoteIdent } from "../config.js";
 import { MnemonConfigurationError } from "../errors.js";
 import { withTransaction, wrapDatabaseError } from "./transaction.js";
 
-export const MIGRATION_VERSION = 1;
+export const MIGRATION_VERSION = 2;
 
 // Rows inherit authorization from the transaction-local settings written by
 // Mnemon.withAuthorization(); inserts without that context fail.
@@ -65,6 +65,10 @@ export async function runMigrations(
 		);
 		const currentVersion = existing.rows[0]?.version;
 		if (currentVersion === MIGRATION_VERSION) {
+			return MIGRATION_VERSION;
+		}
+		if (currentVersion === 1) {
+			await upgradeToV2(client, s);
 			return MIGRATION_VERSION;
 		}
 		if (currentVersion !== undefined) {
@@ -227,10 +231,8 @@ export async function runMigrations(
 			);
 		}
 
-		await client.query(
-			`INSERT INTO ${s}.schema_migrations (version) VALUES ($1)`,
-			[MIGRATION_VERSION],
-		);
+		await client.query(`INSERT INTO ${s}.schema_migrations (version) VALUES (1)`);
+		await upgradeToV2(client, s);
 		return MIGRATION_VERSION;
 	}).catch((error: unknown) => {
 		if (error instanceof MnemonConfigurationError) {
@@ -238,6 +240,50 @@ export async function runMigrations(
 		}
 		throw wrapDatabaseError(error);
 	});
+}
+
+/**
+ * v2 is additive, so a 0.1.0 (v1) schema upgrades in place. Edges written
+ * before v2 count as explicit: upsert never prunes them.
+ */
+async function upgradeToV2(client: PoolClient, s: string): Promise<void> {
+	await client.query(
+		`ALTER TABLE ${s}.edges ADD COLUMN IF NOT EXISTS derived boolean NOT NULL DEFAULT false`,
+	);
+	// Serves case-insensitive entity matching when new edges are derived.
+	await client.query(`
+      CREATE INDEX IF NOT EXISTS insights_entities_lower_gin_idx
+          ON ${s}.insights USING gin ((lower(entities::text)::jsonb) jsonb_path_ops)
+          WHERE deleted_at IS NULL
+    `);
+	await client.query(
+		`INSERT INTO ${s}.schema_migrations (version) VALUES (2)`,
+	);
+}
+
+/**
+ * Creates the HNSW index vector search uses once the embedding dimensions are
+ * known. Idempotent; skips the DDL when the index exists, so an app role
+ * without CREATE works after the owner has run it once.
+ */
+export async function ensureVectorIndex(
+	pool: Pool,
+	schema: string,
+	dimensions: number,
+): Promise<void> {
+	const s = quoteIdent(schema);
+	const found = await pool.query<{ found: boolean }>(
+		"SELECT to_regclass($1) IS NOT NULL AS found",
+		[`${s}.insights_embedding_hnsw_idx`],
+	);
+	if (found.rows[0]?.found) {
+		return;
+	}
+	await pool.query(`
+      CREATE INDEX IF NOT EXISTS insights_embedding_hnsw_idx
+          ON ${s}.insights USING hnsw ((embedding::vector(${String(dimensions)})) vector_cosine_ops)
+          WHERE deleted_at IS NULL AND embedding IS NOT NULL
+    `);
 }
 
 /**

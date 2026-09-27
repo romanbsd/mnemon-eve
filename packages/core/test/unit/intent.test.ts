@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { detectIntent } from "../../src/engine/intent.js";
+import { detectIntent, termPattern } from "../../src/engine/intent.js";
 
 describe("detectIntent", () => {
 	it("detects WHY when it strictly leads", () => {
@@ -27,5 +27,12 @@ describe("detectIntent", () => {
 	it("counts overlapping terms once, like Go", () => {
 		// "tell me about" is one ENTITY hit, not two, so two WHY terms win.
 		expect(detectIntent("why, tell me about the reason")).toBe("WHY");
+	});
+});
+
+describe("termPattern", () => {
+	it("never matches the empty string when a script list is empty", () => {
+		expect("hello why world".match(termPattern(["why"]))).toEqual(["why"]);
+		expect("hello 为什么".match(termPattern(["为什么"]))).toEqual(["为什么"]);
 	});
 });

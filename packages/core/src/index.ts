@@ -51,6 +51,7 @@ export type {
 	ManagedInsightInput,
 	Mnemon,
 	MnemonAuthorization,
+	AuthorizationOptions,
 	MnemonClient,
 	MnemonStatus,
 	OnceResult,

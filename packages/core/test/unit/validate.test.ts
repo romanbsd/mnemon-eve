@@ -6,6 +6,7 @@ import {
 	validateEmbedding,
 	validateLinkInput,
 	validateMetadata,
+	validatePruneInput,
 	validateRecallInput,
 	validateRememberInput,
 	validateRetentionInput,
@@ -65,6 +66,8 @@ describe("validation rejects bad input", () => {
 		["bad UUID", () => validateUuid("not-a-uuid", "id"), /id must be a UUID/],
 		["bad intent", () => validateRecallInput({ query: "q", intent: "HOW" as never }, 8), /invalid intent/],
 		["negative threshold", () => validateRetentionInput({ threshold: -1 }), /threshold/],
+		["threshold above 1", () => validateRetentionInput({ threshold: 1.5 }), /threshold/],
+		["missing prune input", () => validatePruneInput(undefined), /prune needs/],
 		["bad edge type", () => validateLinkInput({ sourceId: ID, targetId: OTHER, edgeType: "friend" as never }), /invalid edgeType/],
 		[
 			"non-string link metadata",
