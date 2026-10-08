@@ -3,6 +3,18 @@
 All notable changes to `@romanbsd/mnemon-core` and `@romanbsd/mnemon-eve`.
 Both packages share one version.
 
+## 0.3.0 — 2026-10-08
+
+### Breaking changes
+
+- **eve:** requires `eve` `>=0.74.0 <0.75.0`. Eve 0.72 renamed `evaluate` to
+  `decide` and `evaluationModel` to `decisionModel`. The Jev helpers call
+  those names. `@ai-sdk/typesafe-ai` is `^3.0.16`.
+
+### Changed
+
+- **core:** no behavior change. The version moves with `@romanbsd/mnemon-eve`.
+
 ## 0.2.0 — 2026-09-28
 
 ### Breaking changes

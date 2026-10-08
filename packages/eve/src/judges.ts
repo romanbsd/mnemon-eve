@@ -34,7 +34,7 @@ interface ChoiceQuestion {
 	criteria: Record<string, string>;
 }
 
-/** Subset of `evaluate` from `eve/ai` the judges need; inject a fake in tests. */
+/** Subset of `decide` from `eve/ai` the judges need; inject a fake in tests. */
 export type JudgeEvaluator = JevEvaluator<
 	ChoiceQuestion,
 	{ choice: string; probabilities?: Record<string, number> }
@@ -51,7 +51,7 @@ function evaluatorFor(options: JevJudgeOptions): JudgeEvaluator {
 }
 
 /**
- * `DiffJudge` backed by `evaluate` from `eve/ai`: one choice per candidate,
+ * `DiffJudge` backed by `decide` from `eve/ai`: one choice per candidate,
  * all in a single request. Pass as `diffJudge` in the Mnemon config.
  */
 export function jevDiffJudge(options: JevJudgeOptions = {}): DiffJudge {
@@ -81,7 +81,7 @@ export function jevDiffJudge(options: JevJudgeOptions = {}): DiffJudge {
 }
 
 /**
- * `CausalJudge` backed by `evaluate` from `eve/ai`: one choice per recent
+ * `CausalJudge` backed by `decide` from `eve/ai`: one choice per recent
  * memory, all in a single request. Edge weight is the chosen relation's
  * probability. Pass as `causalJudge` in the Mnemon config.
  */

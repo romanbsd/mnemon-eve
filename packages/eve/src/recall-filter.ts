@@ -28,7 +28,7 @@ export function relevanceQuestion(i: number) {
 	};
 }
 
-/** Subset of `evaluate` from `eve/ai` that `jevRecallFilter` needs; inject a fake in tests. */
+/** Subset of `decide` from `eve/ai` that `jevRecallFilter` needs; inject a fake in tests. */
 export type RecallEvaluator = JevEvaluator<
 	{ type: "boolean" } & ReturnType<typeof relevanceQuestion>,
 	{ probability?: number }
@@ -42,7 +42,7 @@ export interface JevRecallFilterOptions {
 	evaluate?: RecallEvaluator;
 }
 
-/** `RecallFilter` backed by `evaluate` from `eve/ai`: one boolean per memory, one request. */
+/** `RecallFilter` backed by `decide` from `eve/ai`: one boolean per memory, one request. */
 export function jevRecallFilter(options: JevRecallFilterOptions = {}): RecallFilter {
 	const threshold = options.threshold ?? 0.5;
 	const evaluator: RecallEvaluator = options.evaluate ?? jevEvaluator(options.model);

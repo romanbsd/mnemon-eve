@@ -169,7 +169,7 @@ type JevQuestion =
 	| ({ type: "score" } & typeof IMPORTANCE_QUESTION);
 
 /**
- * Subset of `evaluate` from `eve/ai` that `jevGate` needs; inject a fake in
+ * Subset of `decide` from `eve/ai` that `jevGate` needs; inject a fake in
  * tests. Questions are the gate flags, `category`, `importance`, and
  * `supersedes_<i>` per related memory.
  */
@@ -204,7 +204,7 @@ const JEV_QUESTIONS: Record<string, JevQuestion> = {
 	importance: { type: "score", ...IMPORTANCE_QUESTION },
 };
 
-/** Gate backed by `evaluate` from `eve/ai` (TypeSafe Jev by default). */
+/** Gate backed by `decide` from `eve/ai` (TypeSafe Jev by default). */
 export function jevGate(options: JevGateOptions = {}): MemoryGate {
 	const threshold = options.threshold ?? 0.5;
 	const supersedeThreshold = options.supersedeThreshold ?? 0.8;

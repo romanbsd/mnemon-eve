@@ -41,7 +41,7 @@ configuration or GitHub token is needed.
 npm install @romanbsd/mnemon-eve @romanbsd/mnemon-core eve zod
 ```
 
-- `eve` `>=0.67.0 <0.68.0`, `zod` 4, Node.js 24+
+- `eve` `>=0.74.0 <0.75.0`, `zod` 4, Node.js 24+
 - PostgreSQL with pgvector, and a non-superuser, `NOBYPASSRLS` role. See
   [`@romanbsd/mnemon-core` → Database roles](../core#database-roles).
 
@@ -560,7 +560,7 @@ contradictions, and new phrasings of secrets. To score your own gate, run
 
 ### jevGate
 
-Uses `evaluate` from `eve/ai`. With no `model`, it uses `typesafeModel()`:
+Uses `decide` from `eve/ai`. With no `model`, it uses `typesafeModel()`:
 TypeSafe's API directly when `TYPESAFE_API_KEY` (or `TYPESAFE_AI_API_KEY`) is
 set, otherwise TypeSafe Jev through Vercel AI Gateway, which uses Eve's model
 authentication (`/login` in `eve dev`, or `AI_GATEWAY_API_KEY`). The same
@@ -571,7 +571,7 @@ import { jevGate } from "@romanbsd/mnemon-eve";
 
 jevGate();                                  // typesafeModel(), threshold 0.5
 jevGate({ threshold: 0.7 });                // stricter: a flag counts as true at p ≥ 0.7
-jevGate({ model: "typesafe-ai/jev" });      // any AI SDK evaluation model id or instance
+jevGate({ model: "typesafe-ai/jev" });      // any AI SDK decision model id or instance
 jevGate({ supersedeThreshold: 0.9 });       // p needed to forget a related memory (default 0.8)
 ```
 
@@ -676,7 +676,7 @@ For a gate backed by another model, reuse `gateState(input)` (the JSON state),
 
 `@romanbsd/mnemon-core` can replace two `remember` heuristics with judges (see
 [core Judges](../core#judges)). This package ships Jev-backed ones. Each asks
-one choice per existing memory, all in a single `evaluate` request:
+one choice per existing memory, all in a single `decide` request:
 
 | Judge | Core option | Asks |
 | --- | --- | --- |
