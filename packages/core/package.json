@@ -29,7 +29,7 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"pg": "^8.23.0",
+		"pg": "^8.23.1",
 		"pgvector": "^0.3.0"
 	},
 	"devDependencies": {
