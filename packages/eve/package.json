@@ -1,6 +1,6 @@
 {
 	"name": "@romanbsd/mnemon-eve",
-	"version": "0.3.1",
+	"version": "0.3.2",
 	"description": "Eve memory provider backed by Mnemon: organization and per-user memory with PostgreSQL RLS and a Jev write gate.",
 	"license": "Apache-2.0",
 	"repository": {
@@ -30,10 +30,10 @@
 	},
 	"dependencies": {
 		"@ai-sdk/typesafe-ai": "^3.0.16",
-		"@romanbsd/mnemon-core": "^0.3.1"
+		"@romanbsd/mnemon-core": "^0.3.2"
 	},
 	"peerDependencies": {
-		"eve": ">=0.74.0 <0.77.0",
+		"eve": ">=0.74.0 <0.81.0",
 		"zod": "^4.0.0"
 	},
 	"engines": {
@@ -49,8 +49,8 @@
 		"rls"
 	],
 	"devDependencies": {
-		"ai": "^7.0.128",
-		"eve": "^0.76.3",
+		"ai": "^7.0.142",
+		"eve": "^0.80.0",
 		"zod": "^4.6.5"
 	},
 	"publishConfig": {
