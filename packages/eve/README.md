@@ -41,7 +41,7 @@ configuration or GitHub token is needed.
 npm install @romanbsd/mnemon-eve @romanbsd/mnemon-core eve zod
 ```
 
-- `eve` `>=0.74.0 <0.81.0`, `zod` 4, Node.js 24+
+- `eve` `>=0.74.0 <0.82.0`, `zod` 4, Node.js 24+
 - PostgreSQL with pgvector, and a non-superuser, `NOBYPASSRLS` role. See
   [`@romanbsd/mnemon-core` → Database roles](../core#database-roles).
 
