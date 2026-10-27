@@ -34,7 +34,7 @@ describe("jevEvaluator", () => {
 		expect(decide).toHaveBeenCalledWith({
 			state: { a: 1 },
 			questions: { q: { type: "boolean" } },
-			abortSignal: signal,
+			signal: signal,
 			model: "typesafe-ai/jev",
 		});
 	});

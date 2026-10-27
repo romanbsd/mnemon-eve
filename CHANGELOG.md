@@ -3,6 +3,13 @@
 All notable changes to `@romanbsd/mnemon-core` and `@romanbsd/mnemon-eve`.
 Both packages share one version.
 
+## 0.3.6 — 2026-10-27
+
+### Changed
+
+- **eve:** the `eve` peer is `>=0.74.0 <0.85.0`. `decide` takes `signal`. Memory tools no longer send the current turn as recent context.
+- **core:** no behavior change. The version moves with `@romanbsd/mnemon-eve`.
+
 ## 0.3.5 — 2026-10-26
 
 ### Changed

@@ -31,9 +31,9 @@ export function jevEvaluator<Question, Answer>(
 ): JevEvaluator<Question, Answer> {
 	return (input) =>
 		decide({
-			...input,
 			state: input.state as never,
 			questions: input.questions as never,
 			model,
+			signal: input.abortSignal,
 		});
 }

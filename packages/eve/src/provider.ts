@@ -132,7 +132,6 @@ function defaultGate(): MemoryGate {
 }
 
 const MAX_QUERY_CHARS = 2000;
-const MAX_CONTEXT_CHARS = 4000;
 const MAX_NAMESPACE_CHARS = 200;
 // Core's recall limit cap.
 const MAX_RECALL_LIMIT = 100;
@@ -235,7 +234,7 @@ export function mnemonMemory(options: MnemonMemoryOptions) {
 			// Resolved once here; the tool closes over the locked scope.
 			const scope = resolveScope(ctx.memory, audience, namespace);
 			const slot = ctx.memory.slot;
-			const recentContext = clip(userText(ctx.turn.input), MAX_CONTEXT_CHARS);
+			const recentContext = "";
 			const forget_memory =
 				forgetApproval &&
 				defineTool({
