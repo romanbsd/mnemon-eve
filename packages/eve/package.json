@@ -29,7 +29,7 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@ai-sdk/typesafe-ai": "^3.0.16",
+		"@ai-sdk/typesafe-ai": "^3.0.34",
 		"@romanbsd/mnemon-core": "^0.3.6"
 	},
 	"peerDependencies": {
@@ -49,9 +49,9 @@
 		"rls"
 	],
 	"devDependencies": {
-		"ai": "^7.0.142",
-		"eve": "^0.84.0",
-		"zod": "^4.6.5"
+		"ai": "^7.0.163",
+		"eve": "^0.84.1",
+		"zod": "^4.6.7"
 	},
 	"publishConfig": {
 		"access": "public",
