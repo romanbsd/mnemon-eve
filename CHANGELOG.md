@@ -3,6 +3,13 @@
 All notable changes to `@romanbsd/mnemon-core` and `@romanbsd/mnemon-eve`.
 Both packages share one version.
 
+## 0.3.7 — 2026-11-16
+
+### Changed
+
+- **eve:** the `eve` peer is `^1.0.0`. `decide` is unchanged. Memory recall still runs on `turn.started`.
+- **core:** no behavior change. The version moves with `@romanbsd/mnemon-eve`.
+
 ## 0.3.6 — 2026-10-27
 
 ### Changed
