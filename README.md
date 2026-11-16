@@ -8,8 +8,11 @@ Monorepo for:
   with organization and per-user slots, a pluggable write gate (Jev when
   `TYPESAFE_API_KEY` is set, local heuristics otherwise, or any OpenAI-compatible LLM) that also sets category and importance, and optional
   Jev judges for Mnemon's duplicate/conflict suggestions and causal edges.
+- [`@romanbsd/mnemon-openai`](packages/openai): the same memory model for
+  [`@openai/agents`](https://openai.github.io/openai-agents-js/) via
+  `createMnemonMemory` and `withMnemonMemory`.
 
-The design is in [`docs/eve-mnemon-memory-adapter-spec.md`](docs/eve-mnemon-memory-adapter-spec.md).
+The Eve design is in [`docs/eve-mnemon-memory-adapter-spec.md`](docs/eve-mnemon-memory-adapter-spec.md).
 
 ## Development
 
@@ -32,20 +35,22 @@ Both packages are public on npmjs. Install them directly:
 
 ```sh
 npm install @romanbsd/mnemon-eve @romanbsd/mnemon-core
+# or, for OpenAI Agents:
+npm install @romanbsd/mnemon-openai @romanbsd/mnemon-core @openai/agents
 ```
 
 ## Releasing
 
 CI (`.github/workflows/ci.yml`) runs lint, type checks, build, and the tests
 against PostgreSQL + pgvector on every push, pull request, and `v*` tag. After
-the checks pass on a new `v*` tag, GitHub Actions publishes both packages to
-npmjs through trusted publishing, core before eve. The tag must equal both
-package versions. The npmjs trusted publisher for each package is
+the checks pass on a new `v*` tag, GitHub Actions publishes all packages to
+npmjs through trusted publishing, core then eve then openai. The tag must equal
+every package version. The npmjs trusted publisher for each package is
 `romanbsd/mnemon-eve`, workflow `ci.yml`, with `npm publish` allowed.
 
 ```sh
-npm version 0.1.1 -w @romanbsd/mnemon-core -w @romanbsd/mnemon-eve --no-git-tag-version
-# if core's version changed, raise eve's "@romanbsd/mnemon-core" range to match
+npm version 0.1.1 -w @romanbsd/mnemon-core -w @romanbsd/mnemon-eve -w @romanbsd/mnemon-openai --no-git-tag-version
+# if core's version changed, raise dependents' "@romanbsd/mnemon-core" ranges to match
 npm install   # refresh package-lock.json
 git commit -am "chore: release 0.1.1"
 git push origin master

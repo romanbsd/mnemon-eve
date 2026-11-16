@@ -1,7 +1,25 @@
 # Changelog
 
-All notable changes to `@romanbsd/mnemon-core` and `@romanbsd/mnemon-eve`.
-Both packages share one version.
+All notable changes to `@romanbsd/mnemon-core`, `@romanbsd/mnemon-eve`, and
+`@romanbsd/mnemon-openai`. Packages share one version.
+
+## Unreleased
+
+### Added
+
+- **openai:** new `@romanbsd/mnemon-openai` package — `createMnemonMemory` and
+  `withMnemonMemory` for `@openai/agents`, reusing gates from
+  `@romanbsd/mnemon-eve/gates`.
+- **eve:** `@romanbsd/mnemon-eve/gates` subpath for framework-agnostic gates
+  without requiring the `eve` peer. `eve` is an optional peer
+  (`peerDependenciesMeta`); Jev APIs still need `eve` at runtime.
+
+### Changed
+
+- **eve:** `jevGate` / `jevRecallFilter` live in dedicated modules; `MNEMON_MEMORY_INSTRUCTIONS`
+  moved to `instructions.ts`. Root package re-exports `./gates` plus Eve/Jev-only APIs.
+- **openai:** `@openai/agents` peer is `^0.22.0` (tested window). Optional `eve`
+  peer declared for the `/jev` subpath.
 
 ## 0.3.7 — 2026-11-16
 

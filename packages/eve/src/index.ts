@@ -1,28 +1,20 @@
-export {
-	AUDIENCE_DESCRIPTIONS,
-	CATEGORY_QUESTION,
-	IMPORTANCE_QUESTION,
-	classification,
-	decide,
-	GATE_QUESTIONS,
-	type GateFlag,
-	gateState,
-	type JevGateOptions,
-	jevGate,
-	type MemoryAudience,
-	type MemoryEvaluator,
-	type MemoryGate,
-	type MemoryGateDecision,
-	type MemoryGateInput,
-	supersedeQuestion,
-} from "./gate.js";
-export { heuristicGate, SECRET_PATTERNS } from "./heuristic-gate.js";
+export * from "./gates.js";
 export {
 	type JevEvaluator,
 	jevEvaluator,
 	type JevModel,
 	typesafeModel,
 } from "./jev.js";
+export {
+	type JevGateOptions,
+	jevGate,
+	type MemoryEvaluator,
+} from "./jev-gate.js";
+export {
+	type JevRecallFilterOptions,
+	jevRecallFilter,
+	type RecallEvaluator,
+} from "./jev-recall-filter.js";
 export {
 	CAUSAL_RELATION_CRITERIA,
 	DIFF_RELATION_CRITERIA,
@@ -31,9 +23,7 @@ export {
 	jevCausalJudge,
 	jevDiffJudge,
 } from "./judges.js";
-export { type LlmGateOptions, llmGate, MnemonEveGateError } from "./llm-gate.js";
 export {
-	MNEMON_MEMORY_INSTRUCTIONS,
 	MnemonEveScopeError,
 	type MnemonEveEvent,
 	type MnemonMemoryOptions,
@@ -42,14 +32,6 @@ export {
 	type ProposalStatus,
 	resolveScope,
 } from "./provider.js";
-export {
-	type JevRecallFilterOptions,
-	jevRecallFilter,
-	type RecallEvaluator,
-	type RecallFilter,
-	type RecallFilterInput,
-	relevanceQuestion,
-} from "./recall-filter.js";
 export {
 	byTenant,
 	byTenantPrincipal,

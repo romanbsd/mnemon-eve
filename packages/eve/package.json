@@ -13,6 +13,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./gates": {
+			"types": "./dist/gates.d.ts",
+			"import": "./dist/gates.js"
 		}
 	},
 	"files": [
@@ -35,6 +39,11 @@
 	"peerDependencies": {
 		"eve": "^1.0.0",
 		"zod": "^4.0.0"
+	},
+	"peerDependenciesMeta": {
+		"eve": {
+			"optional": true
+		}
 	},
 	"engines": {
 		"node": ">=24"

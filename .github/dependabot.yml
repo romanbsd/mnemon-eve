@@ -8,7 +8,7 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The root lockfile covers both workspaces.
+  # The root lockfile covers all workspaces.
   - package-ecosystem: npm
     directory: /
     schedule:
