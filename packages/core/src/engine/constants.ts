@@ -44,6 +44,13 @@ export const TEMPORAL_WINDOW_HOURS = 24;
 export const MAX_TEMPORAL_PROXIMITY = 10;
 export const MAX_ENTITY_LINKS = 5;
 export const MAX_TOTAL_ENTITY_EDGES = 50;
+/**
+ * Wide-cast known-entity admission: an entity on more than about 1% of a
+ * store carries little ranking signal, and ordinary words snowball across
+ * writes. The floor keeps useful vocabulary admissible in small stores.
+ */
+export const HOT_ENTITY_SHARE = 0.01;
+export const HOT_ENTITY_MIN_COUNT = 20;
 export const MAX_SEMANTIC_EDGES = 3;
 export const CAUSAL_LOOKBACK = 10;
 export const DEDUP_CANDIDATE_LIMIT = 5;
@@ -197,6 +204,86 @@ export const ACRONYM_STOPWORDS: ReadonlySet<string> = new Set([
 	"TOP",
 	"TOO",
 	"ANY",
+	// Ordinary words written in capitals for emphasis or as labels.
+	// Words that double as technical names (HEAD, POST, PATH, HOME, REST,
+	// DELETE, LINE) are deliberately absent.
+	"OK",
+	"YES",
+	"TRUE",
+	"FALSE",
+	"ONLY",
+	"BOTH",
+	"NEVER",
+	"ALWAYS",
+	"MUST",
+	"STILL",
+	"SAME",
+	"ALSO",
+	"EVERY",
+	"OTHER",
+	"OWN",
+	"REAL",
+	"WORTH",
+	"HARD",
+	"FULL",
+	"EMPTY",
+	"ZERO",
+	"KEEP",
+	"SKIP",
+	"LEFT",
+	"WITH",
+	"FROM",
+	"THAT",
+	"THIS",
+	"THAN",
+	"WHAT",
+	"WHY",
+	"DOES",
+	"CANNOT",
+	"NEEDS",
+	"BEFORE",
+	"AFTER",
+	"FIRST",
+	"SECOND",
+	"THIRD",
+	"FINAL",
+	"THREE",
+	"FOUR",
+	"FIVE",
+	"HIGH",
+	"PASS",
+	"FAIL",
+	"FAILED",
+	"FIX",
+	"FIXED",
+	"DONE",
+	"WRONG",
+	"STALE",
+	"ARMED",
+	"OPEN",
+	"CLOSED",
+	"FOUND",
+	"SENT",
+	"SAFE",
+	"CLEAN",
+	"VERIFY",
+	"CHECK",
+	"REVIEW",
+	"DRAFT",
+	"PROOF",
+	"NOTE",
+	"NOTES",
+	"LESSON",
+	"RULE",
+	"FACT",
+	"FACTS",
+	"DEFECT",
+	"CAUSE",
+	"GOTCHA",
+	"TRAP",
+	"BUG",
+	"ISSUE",
+	"ERROR",
 ]);
 
 export const TECH_DICTIONARY: ReadonlySet<string> = new Set([

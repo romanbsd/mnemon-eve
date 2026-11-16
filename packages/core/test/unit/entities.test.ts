@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	extractEntities,
 	extractEntitiesIndexed,
+	hotEntityAdmissionLimit,
 	mergeEntities,
 } from "../../src/engine/entities.js";
 
@@ -24,6 +25,28 @@ describe("extractEntities", () => {
 
 	it("drops acronym stopwords", () => {
 		expect(extractEntities("THE AND FOR")).not.toContain("THE");
+	});
+
+	it("skips numeric dotted tokens and abbreviations as paths", () => {
+		const entities = extractEntities(
+			"Scores 0.52 and 127.0.0.1, e.g. the J.Y. case on p.4, live in cmd/root.go, llama.cpp and example.org",
+		);
+		expect(entities).toEqual(
+			expect.arrayContaining(["cmd/root.go", "llama.cpp", "example.org"]),
+		);
+		for (const noise of ["0.52", "127.0.0.1", "e.g", "J.Y", "p.4"]) {
+			expect(entities).not.toContain(noise);
+		}
+	});
+
+	it("skips ordinary all-caps emphasis words as acronyms", () => {
+		const entities = extractEntities(
+			"NEVER skip the API check; ONLY use HTTP. Status: OK, FIXED",
+		);
+		expect(entities).toEqual(expect.arrayContaining(["API", "HTTP"]));
+		for (const word of ["NEVER", "ONLY", "OK", "FIXED"]) {
+			expect(entities).not.toContain(word);
+		}
 	});
 
 	it("matches the tech dictionary with original case", () => {
@@ -62,5 +85,15 @@ describe("extractEntities", () => {
 		const entities = extractEntitiesIndexed(`${dense} ask Hestia`, new Set(["Hestia"]));
 		expect(entities).toContain("Hestia");
 		expect(entities).toHaveLength(50);
+	});
+});
+
+describe("hotEntityAdmissionLimit", () => {
+	it("matches upstream frequency-gate parity thresholds", () => {
+		expect(hotEntityAdmissionLimit(0)).toBe(20);
+		expect(hotEntityAdmissionLimit(20)).toBe(20);
+		expect(hotEntityAdmissionLimit(30)).toBe(20);
+		expect(hotEntityAdmissionLimit(3000)).toBe(30);
+		expect(hotEntityAdmissionLimit(2050)).toBe(20.5);
 	});
 });

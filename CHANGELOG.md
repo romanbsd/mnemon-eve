@@ -21,6 +21,16 @@ All notable changes to `@romanbsd/mnemon-core`, `@romanbsd/mnemon-eve`, and
 - **openai:** `@openai/agents` peer is `^0.22.0` (tested window). Optional `eve`
   peer declared for the `/jev` subpath.
 
+### Fixed
+
+- **core:** entity extraction no longer treats numeric dotted tokens / abbreviations
+  (`0.52`, `127.0.0.1`, `e.g`, `J.Y`) as paths, or ordinary all-caps emphasis words
+  (`NEVER`, `ONLY`, `OK`, `FIXED`) as acronyms — ported from upstream mnemon
+  (`2fe8a13c` / `#169`).
+- **core:** wide-cast `knownEntities` admission now frequency-gates hot entities
+  (`max(20, 1% of active insights)`), so common words stop snowballing across writes —
+  ported from upstream mnemon (`d041c692` / `#160`).
+
 ## 0.3.7 — 2026-11-16
 
 ### Changed

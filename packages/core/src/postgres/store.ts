@@ -7,6 +7,8 @@ import {
 	CAUSAL_LOOKBACK,
 	GRAPH_LAMBDA1,
 	GRAPH_LAMBDA2,
+	HOT_ENTITY_MIN_COUNT,
+	HOT_ENTITY_SHARE,
 	MAX_ENTITY_LINKS,
 	MAX_TEMPORAL_PROXIMITY,
 	MAX_TOTAL_ENTITY_EDGES,
@@ -848,18 +850,36 @@ export class PostgresMnemonStore implements MnemonStore {
 		if (words.length === 0) {
 			return [];
 		}
+		// Admit a stored entity into the wide-cast filter only while it appears
+		// on at most max(HOT_ENTITY_MIN_COUNT, HOT_ENTITY_SHARE × active) insights.
+		// Strict regex/dictionary extraction and explicitly provided entities
+		// do not use this set.
 		const result = await this.client.query<Record<string, unknown>>(
 			`
       SELECT w AS entity
       FROM unnest($2::text[]) AS w
-      WHERE EXISTS (
-          SELECT 1 FROM ${this.s}.insights AS i
+      WHERE (
+          SELECT COUNT(*)::float
+          FROM ${this.s}.insights AS i
           WHERE i.namespace = $1
             AND i.deleted_at IS NULL
             AND i.entities @> jsonb_build_array(w)
-      )
+        ) BETWEEN 1 AND GREATEST(
+          $3::float,
+          $4::float * (
+            SELECT COUNT(*)::float
+            FROM ${this.s}.insights
+            WHERE namespace = $1
+              AND deleted_at IS NULL
+          )
+        )
       `,
-			[this.namespace, [...new Set(words)]],
+			[
+				this.namespace,
+				[...new Set(words)],
+				HOT_ENTITY_MIN_COUNT,
+				HOT_ENTITY_SHARE,
+			],
 		);
 		return result.rows.map((row) => dbString(row.entity, "entity"));
 	}

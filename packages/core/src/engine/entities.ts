@@ -1,9 +1,19 @@
 import {
 	ACRONYM_STOPWORDS,
+	HOT_ENTITY_MIN_COUNT,
+	HOT_ENTITY_SHARE,
 	MAX_ENTITIES,
 	TECH_DICTIONARY,
 } from "./constants.js";
 import { uniquePreserveOrder } from "./normalize.js";
+
+/** Active-insight document-frequency ceiling for wide-cast entity admission. */
+export function hotEntityAdmissionLimit(activeInsightCount: number): number {
+	return Math.max(
+		HOT_ENTITY_MIN_COUNT,
+		HOT_ENTITY_SHARE * activeInsightCount,
+	);
+}
 
 const RE_CAMEL = /\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b/g;
 const RE_CAPS = /\b([A-Z]{2,6})\b/g;
@@ -24,6 +34,23 @@ function addMatches(
 			add(value);
 		}
 	}
+}
+
+/**
+ * Path-pattern matches must also look like a file or domain name. The pattern
+ * alone also matches numbers, versions, and addresses with no letter
+ * (`0.52`, `127.0.0.1`) and dotted single letters (`e.g`, `i.e`, `J.Y`, `p.4`).
+ */
+export function looksLikePath(s: string): boolean {
+	if (!/[A-Za-z]/.test(s)) {
+		return false;
+	}
+	for (const segment of s.split(".")) {
+		if (segment.length > 1) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function extractCjkTitles(text: string, add: (value: string) => void): void {
@@ -90,7 +117,11 @@ function extractUncapped(text: string): string[] {
 
 	addMatches(text, RE_CAMEL, 1, add);
 	addMatches(text, RE_CAPS, 1, add);
-	addMatches(text, RE_PATH, 1, add);
+	addMatches(text, RE_PATH, 1, (entity) => {
+		if (looksLikePath(entity)) {
+			add(entity);
+		}
+	});
 	addMatches(text, RE_URL, 0, add);
 	addMatches(text, RE_MENTION, 1, add);
 	extractCjkTitles(text, add);

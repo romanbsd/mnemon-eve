@@ -533,6 +533,36 @@ describe.skipIf(!available)("postgres integration", () => {
 		}
 	});
 
+	it("keeps common words out of the wide-cast entity index", async () => {
+		await withMnemon({ clock }, async (mnemon) => {
+			for (let n = 0; n < 30; n++) {
+				const entities = ["make", "Go", "API"];
+				if (n < 2) {
+					entities.push("zebra");
+				}
+				await mnemon.remember({
+					content: `synthetic deployment note ${n}`,
+					entities,
+				});
+			}
+
+			const automatic = await mnemon.remember({
+				content: "make zebra use Go API",
+			});
+			expect(new Set(automatic.insight.entities)).toEqual(
+				new Set(["Go", "API", "zebra"]),
+			);
+
+			const explicit = await mnemon.remember({
+				content: "make zebra use Go API again",
+				entities: ["make"],
+			});
+			expect(new Set(explicit.insight.entities)).toEqual(
+				new Set(["make", "Go", "API", "zebra"]),
+			);
+		});
+	});
+
 	it("refuses to link a forgotten insight", async () => {
 		await withMnemon({ clock }, async (mnemon) => {
 			const a = await mnemon.remember({ content: "node a about widgets" });
