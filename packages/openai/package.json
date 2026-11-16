@@ -34,7 +34,7 @@
 	},
 	"dependencies": {
 		"@romanbsd/mnemon-core": "^0.3.8",
-		"@romanbsd/mnemon-eve": "^0.3.7"
+		"@romanbsd/mnemon-eve": "^0.3.8"
 	},
 	"peerDependencies": {
 		"@openai/agents": "^0.22.0",
