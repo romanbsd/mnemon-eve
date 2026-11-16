@@ -5,6 +5,8 @@ All notable changes to `@romanbsd/mnemon-core`, `@romanbsd/mnemon-eve`, and
 
 ## Unreleased
 
+## 0.3.8 — 2026-11-16
+
 ### Added
 
 - **openai:** new `@romanbsd/mnemon-openai` package — `createMnemonMemory` and

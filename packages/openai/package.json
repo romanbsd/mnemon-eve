@@ -1,6 +1,6 @@
 {
 	"name": "@romanbsd/mnemon-openai",
-	"version": "0.3.7",
+	"version": "0.3.8",
 	"description": "OpenAI Agents SDK helpers for Mnemon: propose/recall durable memory with organization and per-user scopes.",
 	"license": "Apache-2.0",
 	"repository": {
@@ -33,7 +33,7 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@romanbsd/mnemon-core": "^0.3.7",
+		"@romanbsd/mnemon-core": "^0.3.8",
 		"@romanbsd/mnemon-eve": "^0.3.7"
 	},
 	"peerDependencies": {
